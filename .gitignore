@@ -1,0 +1,12 @@
+# Secrets / local config — never commit
+.env
+*.local
+
+# Dependencies & build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Logs & OS cruft
+*.log
+.DS_Store

@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: archer
+      POSTGRES_PASSWORD: archer
+      POSTGRES_DB: archer_analytics
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Full ordered installer runs on first boot (empty system, no sample data).
+      - ./db:/opt/archer-db:ro
+      - ./db/docker-initdb.sql:/docker-entrypoint-initdb.d/00-install.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U archer -d archer_analytics"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  cache:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    env_file: .env
+    environment:
+      # DATABASE_URL, MOCK_MODE and SYNC_INTERVAL_MINUTES now live in .env (env_file
+      # above) so the DB password isn't committed here. REDIS_URL points at the
+      # in-compose Redis and isn't a secret, so it stays.
+      REDIS_URL: redis://cache:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      cache: { condition: service_healthy }
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:

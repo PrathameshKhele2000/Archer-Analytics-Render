@@ -1,0 +1,51 @@
+Finding ID,Asset Name,CVE,Severity,Priority,Status,Business Unit,Operating System,Owners,Risk Score,Days Open,First Found
+90001,HOST-1001,CVE-2024-1027,Medium,4,Open,Retail Banking,Windows 11,bob@corp.com; alice@corp.com; dan@corp.com,3.1,188,2026-05-02
+90002,HOST-1002,CVE-2024-1014,Critical,1,Closed,Wealth Management,Windows 11,erin@corp.com; dan@corp.com; alice@corp.com,9.1,81,2026-05-02
+90003,HOST-1003,CVE-2024-1035,Medium,1,Closed,Wealth Management,Windows Server 2019,bob@corp.com; carol@corp.com; alice@corp.com,4.7,24,2026-01-19
+90004,HOST-1004,CVE-2024-1005,High,5,In Remediation,Treasury,macOS 14,bob@corp.com,7.1,186,2026-03-08
+90005,HOST-1005,CVE-2024-1026,Low,1,Open,Retail Banking,macOS 14,bob@corp.com; dan@corp.com,3.0,263,2026-04-06
+90006,HOST-1006,CVE-2024-1044,Medium,3,Open,Wealth Management,Ubuntu 22.04,alice@corp.com; erin@corp.com; carol@corp.com,4.5,48,2026-03-16
+90007,HOST-1007,CVE-2024-1049,Medium,3,In Remediation,Payments,Windows 11,alice@corp.com; bob@corp.com,4.0,87,2026-05-04
+90008,HOST-1008,CVE-2024-1045,Low,4,Closed,Treasury,Ubuntu 22.04,erin@corp.com; carol@corp.com,1.6,36,2026-02-27
+90009,HOST-1009,CVE-2024-1026,High,5,In Remediation,Treasury,macOS 14,alice@corp.com; bob@corp.com,6.4,302,2026-02-09
+90010,HOST-1010,CVE-2024-1025,Medium,4,Closed,Retail Banking,Ubuntu 22.04,erin@corp.com; dan@corp.com; bob@corp.com,4.5,95,2026-01-15
+90011,HOST-1011,CVE-2024-1009,Low,5,In Remediation,Retail Banking,RHEL 9,erin@corp.com,0.9,308,2026-01-04
+90012,HOST-1012,CVE-2024-1054,Critical,4,In Remediation,Corporate IT,Ubuntu 22.04,alice@corp.com,8.1,309,2026-03-16
+90013,HOST-1013,CVE-2024-1033,Low,3,In Remediation,Payments,macOS 14,bob@corp.com,2.4,355,2026-02-17
+90014,HOST-1014,CVE-2024-1040,Critical,2,In Remediation,Wealth Management,Windows 11,bob@corp.com; carol@corp.com,9.5,266,2026-03-06
+90015,HOST-1015,CVE-2024-1012,High,5,In Remediation,Treasury,Ubuntu 22.04,dan@corp.com; carol@corp.com,7.5,375,2026-01-01
+90016,HOST-1016,CVE-2024-1058,Medium,3,Open,Retail Banking,Windows Server 2019,erin@corp.com; alice@corp.com; bob@corp.com,3.7,173,2026-02-16
+90017,HOST-1017,CVE-2024-1047,Low,1,Closed,Payments,Windows 11,dan@corp.com; erin@corp.com; bob@corp.com,0.9,43,2026-01-26
+90018,HOST-1018,CVE-2024-1035,High,2,Closed,Retail Banking,Windows Server 2019,carol@corp.com; bob@corp.com; erin@corp.com,7.2,106,2026-05-16
+90019,HOST-1019,CVE-2024-1048,Critical,5,Open,Treasury,RHEL 9,erin@corp.com; bob@corp.com,9.1,15,2026-03-07
+90020,HOST-1020,CVE-2024-1034,Low,2,Closed,Wealth Management,macOS 14,erin@corp.com; bob@corp.com,2.7,75,2026-07-17
+90021,HOST-1021,CVE-2024-1043,Critical,5,Open,Wealth Management,macOS 14,alice@corp.com; erin@corp.com; bob@corp.com,9.7,89,2026-02-16
+90022,HOST-1022,CVE-2024-1028,Low,3,In Remediation,Wealth Management,macOS 14,dan@corp.com; alice@corp.com; erin@corp.com,1.1,22,2026-07-04
+90023,HOST-1023,CVE-2024-1026,High,1,Open,Corporate IT,Ubuntu 22.04,bob@corp.com; dan@corp.com; alice@corp.com,6.9,358,2026-05-09
+90024,HOST-1024,CVE-2024-1056,Medium,2,Open,Corporate IT,Windows 11,carol@corp.com; bob@corp.com; dan@corp.com,3.2,398,2026-02-23
+90025,HOST-1025,CVE-2024-1012,Critical,3,Open,Treasury,Windows Server 2019,carol@corp.com; dan@corp.com,8.8,362,2026-04-17
+90026,HOST-1026,CVE-2024-1056,Medium,1,In Remediation,Retail Banking,RHEL 9,alice@corp.com; erin@corp.com; dan@corp.com,4.3,265,2026-05-10
+90027,HOST-1027,CVE-2024-1044,Medium,3,In Remediation,Retail Banking,RHEL 9,bob@corp.com; dan@corp.com,3.8,347,2026-07-09
+90028,HOST-1028,CVE-2024-1004,Critical,3,Open,Retail Banking,Ubuntu 22.04,alice@corp.com; bob@corp.com,9.6,325,2026-01-26
+90029,HOST-1029,CVE-2024-1010,Critical,3,Open,Retail Banking,Windows 11,alice@corp.com,8.7,23,2026-05-23
+90030,HOST-1030,CVE-2024-1016,High,1,In Remediation,Retail Banking,Windows Server 2019,carol@corp.com; alice@corp.com,7.3,257,2026-06-06
+90031,HOST-1031,CVE-2024-1013,High,2,Closed,Treasury,Windows 11,dan@corp.com; carol@corp.com; erin@corp.com,6.5,56,2026-06-16
+90032,HOST-1032,CVE-2024-1005,High,4,Open,Wealth Management,RHEL 9,bob@corp.com; alice@corp.com,6.7,321,2026-06-09
+90033,HOST-1033,CVE-2024-1056,High,3,Open,Payments,RHEL 9,carol@corp.com; bob@corp.com; alice@corp.com,6.1,135,2026-03-11
+90034,HOST-1034,CVE-2024-1016,High,1,Open,Payments,Ubuntu 22.04,alice@corp.com,6.8,128,2026-05-25
+90035,HOST-1035,CVE-2024-1046,Critical,4,Closed,Payments,RHEL 9,erin@corp.com; dan@corp.com; bob@corp.com,8.8,110,2026-07-05
+90036,HOST-1036,CVE-2024-1048,High,5,Closed,Wealth Management,Windows Server 2019,erin@corp.com,7.7,90,2026-07-17
+90037,HOST-1037,CVE-2024-1016,High,1,In Remediation,Corporate IT,Windows Server 2019,alice@corp.com; bob@corp.com; dan@corp.com,6.1,232,2026-05-02
+90038,HOST-1038,CVE-2024-1047,Critical,4,Open,Corporate IT,Ubuntu 22.04,bob@corp.com,9.3,136,2026-02-24
+90039,HOST-1039,CVE-2024-1016,Critical,3,Closed,Wealth Management,macOS 14,carol@corp.com,9.0,26,2026-01-20
+90040,HOST-1040,CVE-2024-1029,High,4,Closed,Corporate IT,Windows Server 2019,erin@corp.com; carol@corp.com,6.1,28,2026-06-16
+90041,HOST-1041,CVE-2024-1004,High,5,Open,Retail Banking,Windows 11,bob@corp.com; erin@corp.com,6.2,260,2026-04-09
+90042,HOST-1042,CVE-2024-1001,Medium,2,Open,Retail Banking,Ubuntu 22.04,dan@corp.com; erin@corp.com,5.5,361,2026-03-08
+90043,HOST-1043,CVE-2024-1059,Low,2,Open,Retail Banking,RHEL 9,dan@corp.com; alice@corp.com,1.4,170,2026-01-11
+90044,HOST-1044,CVE-2024-1006,Medium,1,In Remediation,Treasury,Windows 11,carol@corp.com,6.0,220,2026-07-09
+90045,HOST-1045,CVE-2024-1005,High,1,In Remediation,Corporate IT,Ubuntu 22.04,dan@corp.com; bob@corp.com; carol@corp.com,6.9,15,2026-07-25
+90046,HOST-1046,CVE-2024-1016,High,3,Open,Corporate IT,Windows 11,carol@corp.com; erin@corp.com,6.6,88,2026-04-14
+90047,HOST-1047,CVE-2024-1028,Medium,3,Open,Corporate IT,Ubuntu 22.04,erin@corp.com; bob@corp.com,3.4,107,2026-05-26
+90048,HOST-1048,CVE-2024-1055,High,4,In Remediation,Corporate IT,Ubuntu 22.04,bob@corp.com; alice@corp.com; carol@corp.com,6.5,123,2026-03-09
+90049,HOST-1049,CVE-2024-1057,High,2,In Remediation,Corporate IT,Ubuntu 22.04,bob@corp.com; alice@corp.com; erin@corp.com,6.7,65,2026-06-17
+90050,HOST-1050,CVE-2024-1000,Low,1,Open,Corporate IT,macOS 14,erin@corp.com; dan@corp.com,2.9,17,2026-04-23

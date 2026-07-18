@@ -1,0 +1,78 @@
+# =====================================================================
+#  Render Blueprint — one-click provisioning of the Archer Analytics DEMO
+#
+#  Creates four things on Render's free tier:
+#    1. archer-db     — PostgreSQL 16 (free)
+#    2. archer-cache  — Key Value / Redis (free, optional cache)
+#    3. archer-api    — the NestJS backend (Docker), serves /api
+#    4. archer-web    — the React frontend (static), proxies /api -> backend
+#
+#  Deploy:  Render Dashboard -> New -> Blueprint -> pick this repo.
+#  Render reads this file and provisions everything, wiring DATABASE_URL,
+#  REDIS_URL and freshly-generated JWT secrets automatically.
+#
+#  AFTER the first deploy you still must:
+#    a) Load the demo data (once):
+#         psql "<archer-db EXTERNAL url>" -f render/demo_db.sql
+#    b) Confirm the frontend's /api rewrite points at the backend's real URL
+#       (see the note on the archer-web service below).
+#  Full walkthrough: render/RENDER-DEPLOY.md
+# =====================================================================
+
+databases:
+  - name: archer-db
+    plan: free
+    region: oregon
+    databaseName: archer_analytics
+    postgresMajorVersion: "16"
+
+services:
+  # ---- Redis-compatible cache (optional; the API degrades gracefully if it's down) ----
+  - type: keyvalue
+    name: archer-cache
+    plan: free
+    region: oregon
+    ipAllowList: []            # reachable only from the other Render services
+    maxmemoryPolicy: allkeys-lru
+
+  # ---- Backend API (NestJS, built from backend/Dockerfile) ----
+  - type: web
+    name: archer-api
+    runtime: docker
+    plan: free
+    region: oregon
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: archer-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: archer-cache
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true          # Render generates a strong random secret
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      # No MSSQL_* vars on purpose -> the live Archer sync stays OFF (correct for a demo).
+
+  # ---- Frontend (Vite/React static build) ----
+  - type: web
+    name: archer-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    routes:
+      # Proxies the app's /api calls to the backend so they stay same-origin (no CORS,
+      # cookies just work). If Render gives your backend a different URL than
+      # "archer-api.onrender.com", update the destination host below and redeploy this site.
+      - type: rewrite
+        source: /api/*
+        destination: https://archer-api.onrender.com/api/*

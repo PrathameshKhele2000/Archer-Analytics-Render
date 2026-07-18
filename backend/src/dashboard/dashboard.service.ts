@@ -1,0 +1,376 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { CacheService } from "../cache/cache.service";
+import { AuthenticatedUser } from "../auth/jwt-payload.interface";
+import { DATA_SOURCE_CATALOG, QUERY_BUILDER_SOURCE } from "./dashboard.entity";
+import { DashboardRepository } from "./dashboard.repository";
+import { buildAggregation, buildAggregationInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, DrillStep, schemaCatalog } from "./query-builder";
+import { Logger } from "@nestjs/common";
+import { CatalogService } from "../datasets/catalog.service";
+import {
+  AddChartWidgetDto,
+  ChartSpecDto,
+  CreateDashboardDto,
+  CreateMyDashboardDto,
+  CreateWidgetDto,
+  GrantAccessDto,
+  UpdateChartWidgetDto,
+  UpdateDashboardDto,
+  UpdateMyDashboardDto,
+  UpdateWidgetDto,
+} from "./dto/dashboard.dto";
+
+const DEFAULT_DATASET = "archer-findings";
+
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "dashboard";
+}
+
+@Injectable()
+export class DashboardService {
+  private readonly log = new Logger(DashboardService.name);
+
+  constructor(
+    private readonly repo: DashboardRepository,
+    private readonly cache: CacheService,
+    private readonly catalogs: CatalogService,
+  ) {}
+
+  /** The catalog a spec queries against — its dataset, or findings by default. */
+  private catalogFor(spec: ChartSpec) {
+    return this.catalogs.forDataset(spec.dataset || DEFAULT_DATASET);
+  }
+
+  /** (Re)build a chart's materialized view; best-effort — charts still work live if this fails. */
+  private async syncChartMatview(widgetId: number, spec: ChartSpec): Promise<void> {
+    if (spec.chartType === "table") return; // records list: no aggregation, no matview
+    try {
+      const catalog = await this.catalogFor(spec);
+      await this.repo.createChartMatview(widgetId, buildAggregationInline(spec, catalog));
+    } catch (e: any) {
+      this.log.warn(`chart matview mv_chart_${widgetId} build failed: ${e?.message ?? e}`);
+    }
+  }
+
+  /** Read a chart's data: matview → lazy-create matview → live aggregation. Never throws
+   *  (a chart with an outdated/invalid spec returns [] so it can't break the dashboard). */
+  private async chartData(widget: { id: number; config: any }): Promise<any[]> {
+    const spec = widget.config as ChartSpec;
+    try {
+      const catalog = await this.catalogFor(spec);
+      // Table = records list: run the (non-aggregated) records query live.
+      if (spec.chartType === "table") {
+        const { sql, params } = buildRecordsChartQuery(spec, catalog);
+        return await this.repo.runAggregation(sql, params);
+      }
+      try {
+        return await this.repo.readChartMatview(widget.id);
+      } catch {
+        try {
+          await this.repo.createChartMatview(widget.id, buildAggregationInline(spec, catalog));
+          return await this.repo.readChartMatview(widget.id);
+        } catch {
+          const { sql, params } = buildAggregation(spec, catalog);
+          return await this.repo.runAggregation(sql, params);
+        }
+      }
+    } catch (e: any) {
+      this.log.warn(`chart ${widget.id} data failed (returning empty): ${e?.message ?? e}`);
+      return [];
+    }
+  }
+
+  listForUser(user: AuthenticatedUser) {
+    return this.repo.listAccessible(user.id, user.roles);
+  }
+
+  /** Legacy fixed-chart palette (still used by the seeded system dashboard). */
+  dataSourceCatalog() {
+    return DATA_SOURCE_CATALOG;
+  }
+
+  /** Archer-style builder catalog: X-axis fields, Y-axis measures, chart types, and the
+   *  advanced filter fields + per-type operators (shared with the report filter builder). */
+  async schema(datasetKey?: string) {
+    const key = datasetKey || DEFAULT_DATASET;
+    const [catalog, { fields, operators }, datasets] = await Promise.all([
+      this.catalogs.forDataset(key),
+      this.catalogs.fieldCatalogFor(key),
+      this.catalogs.listDatasets(),
+    ]);
+    return {
+      ...schemaCatalog(catalog),
+      datasets, // so the builder can offer a dataset picker
+      operators,
+      filterFields: fields,
+    };
+  }
+
+  /** Live preview: run an ad-hoc chart spec without saving it. */
+  async previewQuery(spec: ChartSpecDto) {
+    // Table = records list: return raw records + the resolved column set.
+    const catalog = await this.catalogFor(spec as ChartSpec);
+    if ((spec as ChartSpec).chartType === "table") {
+      const { sql, params, columns } = buildRecordsChartQuery(spec as ChartSpec, catalog);
+      const rows = await this.repo.runAggregation(sql, params);
+      return { rows, columns: columns.map((c) => ({ key: c.key, label: c.label, numeric: !!c.numeric })) };
+    }
+    const { sql, params } = buildAggregation(spec as ChartSpec, catalog);
+    const rows = await this.repo.runAggregation(sql, params);
+    return { rows };
+  }
+
+  /** Validate a chart spec (throws 400 on bad keys), for either the aggregation or records path. */
+  private async validateChartSpec(spec: ChartSpec): Promise<void> {
+    const catalog = await this.catalogFor(spec);
+    if (spec.chartType === "table") buildRecordsChartQuery(spec, catalog);
+    else buildAggregation(spec, catalog);
+  }
+
+  // ---- Self-service builder (any user with dashboard:create) ----
+
+  async createMine(user: AuthenticatedUser, dto: CreateMyDashboardDto) {
+    const key = await this.uniqueKey(slugify(dto.name), user.id);
+    const dashboard = await this.repo.create(key, dto.name, dto.description, 0, user.id);
+    // Owner always sees their own dashboard; also grant an explicit user access row for clarity.
+    await this.repo.grantAccess(dashboard.id, null, user.id);
+    await this.invalidate(key);
+    return this.repo.findById(dashboard.id);
+  }
+
+  async updateMine(key: string, user: AuthenticatedUser, dto: UpdateMyDashboardDto) {
+    const dashboard = await this.mustOwn(key, user);
+    await this.repo.update(dashboard.id, { name: dto.name, description: dto.description });
+    await this.invalidate(key);
+    return this.repo.findById(dashboard.id);
+  }
+
+  async deleteMine(key: string, user: AuthenticatedUser) {
+    const dashboard = await this.mustOwn(key, user);
+    // Drop per-chart matviews before the widgets cascade away (else they orphan).
+    const widgets = await this.repo.listWidgets(dashboard.id, false);
+    for (const w of widgets) {
+      if (w.data_source === QUERY_BUILDER_SOURCE) await this.repo.dropChartMatview(w.id).catch(() => undefined);
+    }
+    await this.repo.deleteByIdCascade(dashboard.id);
+    await this.invalidate(key);
+  }
+
+  async shareMine(key: string, user: AuthenticatedUser, dto: GrantAccessDto) {
+    const dashboard = await this.mustOwn(key, user);
+    if (!dto.roleId && !dto.userId) throw new BadRequestException("Provide roleId or userId");
+    return this.repo.grantAccess(dashboard.id, dto.roleId ?? null, dto.userId ?? null);
+  }
+
+  // ---- Per-chart CRUD on an owned dashboard (the query-builder charts) ----
+
+  async addChart(key: string, user: AuthenticatedUser, dto: AddChartWidgetDto) {
+    const dashboard = await this.mustOwn(key, user);
+    // Validate the spec early (throws 400 on bad keys) so we never store junk.
+    await this.validateChartSpec(dto.spec as ChartSpec);
+    const existing = await this.repo.listWidgets(dashboard.id, false);
+    const widget = await this.repo.addWidget(dashboard.id, {
+      key: `chart_${Date.now()}`,
+      title: dto.title,
+      widget_type: dto.spec.chartType,
+      data_source: QUERY_BUILDER_SOURCE,
+      sort_order: existing.length,
+      is_active: true,
+      config: dto.spec as unknown as Record<string, unknown>,
+    });
+    await this.syncChartMatview(widget.id, dto.spec as ChartSpec); // pre-build so first view is instant
+    await this.invalidate(key);
+    return widget;
+  }
+
+  async updateChart(key: string, widgetId: number, user: AuthenticatedUser, dto: UpdateChartWidgetDto) {
+    await this.mustOwn(key, user);
+    if (dto.spec) await this.validateChartSpec(dto.spec as ChartSpec);
+    await this.repo.updateWidget(widgetId, {
+      title: dto.title,
+      widget_type: dto.spec?.chartType,
+      config: dto.spec as unknown as Record<string, unknown> | undefined,
+      sort_order: dto.sortOrder,
+    });
+    if (dto.spec) await this.syncChartMatview(widgetId, dto.spec as ChartSpec); // spec changed -> rebuild
+    await this.invalidate(key);
+    return this.repo.listWidgets((await this.repo.findByKey(key))!.id, false);
+  }
+
+  async removeChart(key: string, widgetId: number, user: AuthenticatedUser) {
+    await this.mustOwn(key, user);
+    await this.repo.deleteWidget(widgetId);
+    await this.repo.dropChartMatview(widgetId).catch(() => undefined);
+    await this.invalidate(key);
+  }
+
+  /**
+   * Drill one level down a chart. Only needs read access to the dashboard; the
+   * drill path is validated against the widget's own stored spec, so viewers of a
+   * shared dashboard can drill but cannot alter what's queried.
+   */
+  async drill(key: string, widgetId: number, user: AuthenticatedUser, steps: DrillStep[]) {
+    const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
+    if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
+    const widget = (await this.repo.listWidgets(dashboard.id, false)).find((w) => w.id === widgetId);
+    if (!widget || widget.data_source !== QUERY_BUILDER_SOURCE) {
+      throw new NotFoundException("Chart not found");
+    }
+    const spec = widget.config as unknown as ChartSpec;
+    const { sql, params, dimension, atLeaf } = buildDrill(spec, await this.catalogFor(spec), steps);
+    const rows = dimension ? await this.repo.runAggregation(sql, params) : [];
+    return { rows, dimension, atLeaf };
+  }
+
+  /** Raw records behind a chart's full drill path (the leaf-level table). */
+  async chartRecords(key: string, widgetId: number, user: AuthenticatedUser, steps: DrillStep[]) {
+    const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
+    if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
+    const widget = (await this.repo.listWidgets(dashboard.id, false)).find((w) => w.id === widgetId);
+    if (!widget || widget.data_source !== QUERY_BUILDER_SOURCE) {
+      throw new NotFoundException("Chart not found");
+    }
+    const spec = widget.config as unknown as ChartSpec;
+    // Each step's dimension must follow the chart's own drill sequence.
+    const sequence = [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean) as string[];
+    steps.forEach((step, i) => {
+      if (step.dimension !== sequence[i]) {
+        throw new BadRequestException("Drill path does not match this chart's drill-down sequence");
+      }
+    });
+    const { sql, params } = buildRecordsQuery(spec, await this.catalogFor(spec), steps);
+    const rows = await this.repo.runAggregation(sql, params);
+    return { rows };
+  }
+
+  private async mustOwn(key: string, user: AuthenticatedUser) {
+    const dashboard = await this.repo.findByKey(key);
+    if (!dashboard) throw new NotFoundException("Dashboard not found");
+    const isOwner = dashboard.owner_user_id === user.id;
+    const isAdmin = user.permissions.includes("admin:dashboards:manage");
+    if (!isOwner && !isAdmin) throw new ForbiddenException("You can only modify your own dashboards");
+    return dashboard;
+  }
+
+  private async uniqueKey(base: string, userId: number): Promise<string> {
+    let candidate = `${base}-u${userId}`;
+    let n = 1;
+    while (await this.repo.findByKey(candidate)) {
+      candidate = `${base}-u${userId}-${n++}`;
+    }
+    return candidate;
+  }
+
+  async getWithData(key: string, user: AuthenticatedUser) {
+    const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
+    if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
+
+    const cacheKey = `dash:${key}:data`;
+    const cached = await this.cache.getJson<Record<string, any[]>>(cacheKey);
+    const widgets = await this.repo.listWidgets(dashboard.id);
+    if (cached) return { dashboard, widgets, data: cached };
+
+    // Run every widget's query concurrently; user-built charts read a per-chart
+    // materialized view (instant, row-count-independent) with a live fallback.
+    const entries = await Promise.all(
+      widgets.map(async (widget): Promise<[string, any[]]> => {
+        if (widget.data_source === QUERY_BUILDER_SOURCE) {
+          return [widget.key, await this.chartData(widget)];
+        }
+        // Legacy fixed-source widgets: tolerate a missing data source (return empty).
+        try {
+          return [widget.key, await this.repo.runWidgetData(widget.data_source)];
+        } catch (e: any) {
+          this.log.warn(`widget ${widget.id} source '${widget.data_source}' failed: ${e?.message ?? e}`);
+          return [widget.key, []];
+        }
+      }),
+    );
+    const data: Record<string, any[]> = Object.fromEntries(entries);
+    await this.cache.setJson(cacheKey, data);
+    return { dashboard, widgets, data };
+  }
+
+  // ---- Admin ----
+
+  listAll() {
+    return this.repo.listAll();
+  }
+
+  async create(dto: CreateDashboardDto) {
+    return this.repo.create(dto.key, dto.name, dto.description, dto.sortOrder ?? 0);
+  }
+
+  async update(id: number, dto: UpdateDashboardDto) {
+    const updated = await this.repo.update(id, {
+      name: dto.name,
+      description: dto.description,
+      is_active: dto.isActive,
+      sort_order: dto.sortOrder,
+    });
+    if (!updated) throw new NotFoundException("Dashboard not found");
+    await this.invalidate(updated.key);
+    return updated;
+  }
+
+  async addWidget(dashboardId: number, dto: CreateWidgetDto) {
+    const dashboard = await this.repo.findById(dashboardId);
+    if (!dashboard) throw new NotFoundException("Dashboard not found");
+    const widget = await this.repo.addWidget(dashboardId, {
+      key: dto.key,
+      title: dto.title,
+      widget_type: dto.widgetType,
+      data_source: dto.dataSource,
+      sort_order: dto.sortOrder ?? 0,
+      is_active: true,
+      config: dto.config ?? {},
+    });
+    await this.invalidate(dashboard.key);
+    return widget;
+  }
+
+  async updateWidget(dashboardId: number, widgetId: number, dto: UpdateWidgetDto) {
+    const dashboard = await this.repo.findById(dashboardId);
+    if (!dashboard) throw new NotFoundException("Dashboard not found");
+    await this.repo.updateWidget(widgetId, {
+      title: dto.title,
+      widget_type: dto.widgetType,
+      data_source: dto.dataSource,
+      sort_order: dto.sortOrder,
+      is_active: dto.isActive,
+      config: dto.config,
+    });
+    await this.invalidate(dashboard.key);
+    return this.repo.listWidgets(dashboardId, false);
+  }
+
+  async deleteWidget(dashboardId: number, widgetId: number) {
+    const dashboard = await this.repo.findById(dashboardId);
+    if (!dashboard) throw new NotFoundException("Dashboard not found");
+    await this.repo.deleteWidget(widgetId);
+    await this.invalidate(dashboard.key);
+  }
+
+  listAccess(dashboardId: number) {
+    return this.repo.listAccess(dashboardId);
+  }
+
+  grantAccess(dashboardId: number, dto: GrantAccessDto) {
+    if (!dto.roleId && !dto.userId) {
+      throw new NotFoundException("Provide either roleId or userId");
+    }
+    return this.repo.grantAccess(dashboardId, dto.roleId ?? null, dto.userId ?? null);
+  }
+
+  revokeAccess(accessId: number) {
+    return this.repo.revokeAccess(accessId);
+  }
+
+  private async invalidate(dashboardKey: string) {
+    await this.cache.invalidatePrefix(`dash:${dashboardKey}`);
+  }
+}
