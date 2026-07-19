@@ -146,7 +146,10 @@
       "Bash(grep -n -iA 30 \"known gap\" README.md)",
       "Bash(grep -nA6 \"routes:\" render.yaml)",
       "Bash(VITE_API_BASE=\"https://archer-analytics-render.onrender.com\" npx vite build)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(echo \"=== datasets registered + their row counts \\(LOCAL\\) ===\")",
+      "Bash(awk '/^COPY public\\\\./{t=$2; c=0; next} t&&/^\\\\\\\\\\\\.$/{print t, c; t=\"\"} t{c++}' render/demo_db.sql)",
+      "Bash(sort -k2 -n -r)"
     ]
   }
 }
