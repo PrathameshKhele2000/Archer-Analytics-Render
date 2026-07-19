@@ -1,5 +1,14 @@
 import { SafeUser, tokenStore } from "./auth";
 
+/**
+ * Base URL for all API calls. Empty for local dev (Vite proxy) and Docker (nginx
+ * proxy), where /api is same-origin. On hosts where the frontend and backend are
+ * SEPARATE origins (e.g. Render: static site + web service), set VITE_API_BASE at
+ * build time to the backend's absolute URL, e.g. https://archer-analytics-render.onrender.com
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
+const apiUrl = (path: string) => API_BASE + path;
+
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn;
@@ -11,7 +20,7 @@ async function doRefresh(): Promise<boolean> {
   const refreshToken = tokenStore.getRefresh();
   if (!refreshToken) return false;
   try {
-    const res = await fetch("/api/auth/refresh", {
+    const res = await fetch(apiUrl("/api/auth/refresh"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken }),
@@ -31,7 +40,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers: { "Content-Type": "application/json", ...(await authHeaders()), ...init.headers },
   });
@@ -74,12 +83,12 @@ async function saveBlob(res: Response, fallback: string) {
 }
 
 async function download(path: string): Promise<void> {
-  const res = await fetch(path, { headers: await authHeaders() });
+  const res = await fetch(apiUrl(path), { headers: await authHeaders() });
   await saveBlob(res, "export");
 }
 
 async function downloadPost(path: string, body: unknown): Promise<void> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify(body),
@@ -303,7 +312,7 @@ export const api = {
       post<{ accessToken: string; refreshToken: string; user: SafeUser }>("/api/auth/login", { email, password }),
     me: () => get<SafeUser>("/api/auth/me"),
     ssoConfig: () => get<{ enabled: boolean }>("/api/auth/sso/config"),
-    ssoLoginUrl: "/api/auth/sso/login",
+    ssoLoginUrl: apiUrl("/api/auth/sso/login"),
   },
 
   dashboards: {

@@ -27,9 +27,11 @@ The repo root has a **`render.yaml`** that provisions everything at once.
    ```bash
    psql "<archer-db EXTERNAL_DATABASE_URL>" -v ON_ERROR_STOP=1 -f render/demo_db.sql
    ```
-4. **Check the frontend proxy:** open the `archer-api` service, copy its real URL. If it isn't
-   exactly `https://archer-api.onrender.com`, edit `render.yaml`'s `destination` (under
-   `archer-web` → `routes`) to that URL, commit, and let the static site redeploy.
+4. **Point the frontend at the backend:** open the `archer-api` service and copy its real URL.
+   On the `archer-web` static site → **Environment** → set `VITE_API_BASE` to that URL
+   (e.g. `https://archer-analytics-render.onrender.com`), then **Manual Deploy → Clear build
+   cache & deploy**. This is a *build-time* variable, so the site MUST be rebuilt for it to
+   take effect. (The `render.yaml` sets a default — change it to your URL if different.)
 5. **Secure it:** log in as admin and change the password (Admin Panel → Users → Edit).
 
 Open the **archer-web** URL — that's your app. Done.
@@ -90,12 +92,20 @@ Render Dashboard → **New → Static Site** → same repo.
 - **Root dir:** `frontend`
 - **Build command:** `npm ci && npm run build`
 - **Publish directory:** `frontend/dist`
-- **Rewrite rule** (Settings → Redirects/Rewrites): this makes the app's `/api` calls reach
-  the backend on the same origin (so auth cookies work):
+- **Environment variable** — this is how the app finds the backend:
+
+  | Key | Value |
+  |---|---|
+  | `VITE_API_BASE` | your backend URL, e.g. `https://archer-analytics-render.onrender.com` |
+
+  It's a **build-time** variable (Vite bakes it into the bundle), so after setting it you
+  must **rebuild** the site. The backend already allows CORS and auth uses Bearer tokens
+  (not cookies), so the cross-origin call works.
+- **SPA fallback** (Settings → Redirects/Rewrites), so page refreshes work:
 
   | Source | Destination | Action |
   |---|---|---|
-  | `/api/*` | `https://archer-api.onrender.com/api/:splat` | **Rewrite** |
+  | `/*` | `/index.html` | **Rewrite** |
 
 Open the Static Site URL — that's your app.
 

@@ -69,10 +69,15 @@ services:
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
+    envVars:
+      # The frontend and backend are separate origins on Render, so the built app
+      # calls the backend by its ABSOLUTE url (baked in at build time). The backend
+      # already allows CORS, and auth uses Bearer tokens (not cookies), so this works.
+      # >>> Replace with YOUR backend service URL if it differs. <<<
+      - key: VITE_API_BASE
+        value: https://archer-analytics-render.onrender.com
     routes:
-      # Proxies the app's /api calls to the backend so they stay same-origin (no CORS,
-      # cookies just work). If Render gives your backend a different URL than
-      # "archer-api.onrender.com", update the destination host below and redeploy this site.
+      # SPA fallback: serve index.html for client-side paths (page refreshes).
       - type: rewrite
-        source: /api/*
-        destination: https://archer-api.onrender.com/api/*
+        source: /*
+        destination: /index.html
