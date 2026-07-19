@@ -157,7 +157,9 @@
       "Bash(git rm *)",
       "Bash(awk '{print $NF}')",
       "Bash(curl -s -o /dev/null -w \"backend health: %{http_code}\\\\n\" http://localhost:8000/api/health)",
-      "Bash(curl -s -o /dev/null -w \"login:          %{http_code}\\\\n\" -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')"
+      "Bash(curl -s -o /dev/null -w \"login:          %{http_code}\\\\n\" -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(awk '{print \"file size:\", $5}')",
+      "Bash(awk '/^COPY public.fact_findings /{f=1;c=0;next} f&&/^\\\\\\\\\\\\.$/{print c; f=0} f{c++}' azure_db_dump.sql)"
     ]
   }
 }

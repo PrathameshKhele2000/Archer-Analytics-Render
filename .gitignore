@@ -10,3 +10,7 @@ dist/
 # Logs & OS cruft
 *.log
 .DS_Store
+
+# Local database dumps (large; not source)
+azure_db_dump.sql
+backup.sql
