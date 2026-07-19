@@ -28,9 +28,10 @@ services:
     build: ./backend
     env_file: .env
     environment:
-      # DATABASE_URL, MOCK_MODE and SYNC_INTERVAL_MINUTES now live in .env (env_file
-      # above) so the DB password isn't committed here. REDIS_URL points at the
-      # in-compose Redis and isn't a secret, so it stays.
+      # All backend settings (DATABASE_URL, JWT secrets, MSSQL_*, etc.) live in
+      # .env (env_file above) so nothing secret is committed here. See
+      # .env.example / CONFIGURATION.md for the full list. REDIS_URL points at the
+      # in-compose Redis and isn't a secret, so it stays here.
       REDIS_URL: redis://cache:6379/0
     extra_hosts:
       - "host.docker.internal:host-gateway"

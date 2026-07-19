@@ -36,8 +36,8 @@ Docker is **not required**. Both ways run the same app and end at the same place
 
 ```bash
 # 1. Get the code onto the VM, then:
-cp .env.production.example .env
-#    edit .env — see section 3 (secrets + DB + MSSQL)
+cp .env.example .env
+#    edit .env — see section 3 (secrets + DB + MSSQL). Full reference: CONFIGURATION.md
 
 # 2. Set a strong Postgres password in docker-compose.yml (POSTGRES_PASSWORD)
 #    and make DATABASE_URL in .env match it.
@@ -108,7 +108,7 @@ The automatic sync, dataset registry, dashboards and reports all work identicall
 
 ## 3. Secrets & hardening (do once, before real data)
 
-In `.env` (see `.env.production.example`) — **generate fresh values, reuse nothing from dev/chat**:
+In `.env` (see `.env.example` and `CONFIGURATION.md`) — **generate fresh values, reuse nothing from dev/chat**:
 
 ```bash
 openssl rand -hex 32   # -> JWT_SECRET

@@ -688,3 +688,68 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 .arch-card.cap ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px;
   font-size: 12.5px; color: var(--ink); line-height: 1.5; }
 .arch-card.cap li b { font-weight: 600; }
+
+/* =====================================================================
+   Mobile / small screens — full responsive pass (phones & small tablets)
+   ===================================================================== */
+@media (max-width: 700px) {
+  .shell { padding: 0 12px 48px; }
+
+  /* Top bar: stack title, nav, and account so nothing overflows */
+  header.masthead { flex-direction: column; align-items: stretch; padding: 14px 0 10px; gap: 8px; }
+  .masthead h1 { font-size: 17px; }
+  .tabs { flex-wrap: wrap; }
+  .masthead .sync { width: 100%; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; }
+
+  /* Admin sub-tabs: horizontal scroll strip instead of wrapping/overflow */
+  .admin-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding: 10px 12px; }
+  .admin-tabs button { flex: 0 0 auto; white-space: nowrap; }
+
+  /* Tab content: tighter padding */
+  .admin-tab, .datasets-tab, .views-tab, .mapping-tab { padding: 12px; }
+
+  /* Toolbars stack vertically and go full width */
+  .tab-toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .toolbar-actions { flex-wrap: wrap; }
+  .dash-toolbar select { width: 100%; max-width: none; }
+  .dash-toolbar-right { margin-left: 0; width: 100%; flex-wrap: wrap; }
+  .report-head { flex-direction: column; align-items: stretch; padding: 12px; }
+  .report-tools { margin-left: 0; flex-wrap: wrap; }
+  .search-box { flex: 1 1 100%; }
+  .search-box input { width: 100%; }
+  .row-actions { flex-wrap: wrap; }
+
+  /* Wide data tables become horizontally scrollable (no page-wide overflow) */
+  table.findings { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+
+  /* KPI tiles: fit two per row on a phone */
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+  /* Chart editor: shorter preview, tighter type gallery */
+  .preview-panel { height: 340px; }
+  .preview-panel .chart-wrap { min-height: 300px; }
+  .type-gallery { gap: 4px; }
+
+  /* Forms: stack the two-up input rows */
+  .field-row { flex-direction: column; gap: 10px; }
+  .field-row .fld { width: 100%; }
+
+  /* Modals: use more of the screen; login card fluid */
+  .modal-overlay { padding: 20px 10px; }
+  .modal-body { padding: 14px; }
+  .login-card { width: 100%; max-width: 360px; }
+
+  /* Pager wraps */
+  .pager { flex-wrap: wrap; gap: 10px; }
+
+  /* Architecture page */
+  .arch-shell { padding: 18px 12px 48px; }
+  .arch-topbar { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .arch-highlights { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Extra-small phones */
+@media (max-width: 380px) {
+  .arch-highlights { grid-template-columns: 1fr; }
+  .type-gallery { grid-template-columns: repeat(3, 1fr); }
+}
