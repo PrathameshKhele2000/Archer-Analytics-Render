@@ -70,13 +70,12 @@ export class DashboardService {
       try {
         return await this.repo.readChartMatview(widget.id);
       } catch {
-        try {
-          await this.repo.createChartMatview(widget.id, buildAggregationInline(spec, catalog));
-          return await this.repo.readChartMatview(widget.id);
-        } catch {
-          const { sql, params } = buildAggregation(spec, catalog);
-          return await this.repo.runAggregation(sql, params);
-        }
+        // No matview yet (new chart, or its build is still running). Serve the answer
+        // LIVE right now and build the matview in the background — building it here
+        // would stall the whole dashboard for minutes on a large table.
+        void this.syncChartMatview(widget.id, spec);
+        const { sql, params } = buildAggregation(spec, catalog);
+        return await this.repo.runAggregation(sql, params);
       }
     } catch (e: any) {
       this.log.warn(`chart ${widget.id} data failed (returning empty): ${e?.message ?? e}`);
@@ -182,7 +181,12 @@ export class DashboardService {
       is_active: true,
       config: dto.spec as unknown as Record<string, unknown>,
     });
-    await this.syncChartMatview(widget.id, dto.spec as ChartSpec); // pre-build so first view is instant
+    // Build the matview in the BACKGROUND. It aggregates the whole table, which on a
+    // large dataset takes minutes — awaiting it here holds the HTTP request open until
+    // the gateway kills it (Azure App Service cuts off at 230s), so saving a chart
+    // appears to fail. The chart works immediately either way: until the matview
+    // exists, chartData() falls back to a live aggregation.
+    void this.syncChartMatview(widget.id, dto.spec as ChartSpec);
     await this.invalidate(key);
     return widget;
   }
@@ -196,7 +200,7 @@ export class DashboardService {
       config: dto.spec as unknown as Record<string, unknown> | undefined,
       sort_order: dto.sortOrder,
     });
-    if (dto.spec) await this.syncChartMatview(widgetId, dto.spec as ChartSpec); // spec changed -> rebuild
+    if (dto.spec) void this.syncChartMatview(widgetId, dto.spec as ChartSpec); // spec changed -> rebuild in background
     await this.invalidate(key);
     return this.repo.listWidgets((await this.repo.findByKey(key))!.id, false);
   }

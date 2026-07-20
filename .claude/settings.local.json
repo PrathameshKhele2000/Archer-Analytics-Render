@@ -167,7 +167,9 @@
       "Bash(curl -s -i -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
       "Bash(lsof -nP -iTCP:5433 -sTCP:LISTEN)",
       "Bash(awk '{print \"disk free: \"$4}')",
-      "Bash(echo \"  completed. sort indexes: $\\(docker exec trgmtest psql -U postgres -d t -tAc \"select count\\(*\\) from pg_indexes where tablename='fact_findings' and indexname like 'ix_ff_sort%'\"\\)  trigram indexes: $\\(docker exec trgmtest psql -U postgres -d t -tAc \"select count\\(*\\) from pg_indexes where tablename='fact_findings' and indexname like '%trgm%'\"\\)\")"
+      "Bash(echo \"  completed. sort indexes: $\\(docker exec trgmtest psql -U postgres -d t -tAc \"select count\\(*\\) from pg_indexes where tablename='fact_findings' and indexname like 'ix_ff_sort%'\"\\)  trigram indexes: $\\(docker exec trgmtest psql -U postgres -d t -tAc \"select count\\(*\\) from pg_indexes where tablename='fact_findings' and indexname like '%trgm%'\"\\)\")",
+      "Bash(sed -n '/async createChart/,/^  }/p' backend/src/dashboard/dashboard.service.ts)",
+      "Bash(sed -n '/private async syncChartMatview/,/^  }/p' backend/src/dashboard/dashboard.service.ts)"
     ]
   }
 }

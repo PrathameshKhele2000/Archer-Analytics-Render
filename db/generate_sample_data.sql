@@ -174,6 +174,24 @@ CREATE INDEX ix_ff_comments_trgm     ON fact_findings USING GIN (comments gin_tr
 
 -- 5) Fresh planner stats + tidy up the generator functions.
 ANALYZE fact_findings;
+
+-- ---------------------------------------------------------------------
+-- Chart materialized views are PRE-AGGREGATED copies of this table. The app reads
+-- them without a staleness check, so after replacing the data they MUST be refreshed
+-- or every dashboard keeps showing the OLD numbers (or nothing at all).
+-- ---------------------------------------------------------------------
+DO $refresh$
+DECLARE mv record;
+BEGIN
+  FOR mv IN SELECT schemaname, matviewname FROM pg_matviews LOOP
+    BEGIN
+      EXECUTE format('REFRESH MATERIALIZED VIEW %I.%I', mv.schemaname, mv.matviewname);
+      RAISE NOTICE 'refreshed %', mv.matviewname;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'could not refresh % (%)', mv.matviewname, SQLERRM;
+    END;
+  END LOOP;
+END $refresh$;
 DROP FUNCTION _gen_finding(bigint);
 DROP FUNCTION _rand_arr(text[], int, int, text);
 DROP FUNCTION _rand_ids(text, int, int, int);
