@@ -14,7 +14,18 @@
 -- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- pg_trgm powers fast "contains" search. Some managed providers (notably Azure
+-- Database for PostgreSQL) block extensions unless they're allow-listed, and a hard
+-- failure here would abort the WHOLE installer. Warn and continue instead: everything
+-- else installs, and the trigram search indexes are skipped automatically.
+-- To enable it on Azure: Server parameters -> azure.extensions -> add PG_TRGM -> Save.
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS pg_trgm;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'pg_trgm unavailable (%) — text-search indexes will be skipped. Allow-list it for fast search.', SQLERRM;
+END $$;
 -- =====================================================================
 -- RBAC: users, roles, permissions, and grants on dashboards/reports
 -- =====================================================================

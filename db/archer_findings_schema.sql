@@ -19,7 +19,15 @@
 --    * record_id                 -> Archer Content ID (the unique system key)
 -- =====================================================================
 
-CREATE EXTENSION IF NOT EXISTS pg_trgm;   -- fast "contains" text search
+-- Fast "contains" text search. Optional: managed hosts (Azure) may block it unless
+-- allow-listed, so never let it abort the install — the trigram indexes below are
+-- created only if the extension is actually present.
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS pg_trgm;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'pg_trgm unavailable (%) — text-search indexes will be skipped.', SQLERRM;
+END $$;
 
 -- ---------------------------------------------------------------------
 -- Main table: one row per finding
@@ -254,14 +262,24 @@ CREATE INDEX IF NOT EXISTS ix_ff_impacted_dev_gin   ON fact_findings USING GIN (
 -- Free-text search (ILIKE '%...%') on the fields users look records up by.
 -- Every column that is marked searchable needs a trigram index, otherwise the
 -- global/in-field search OR forces a full sequential scan of the whole table.
-CREATE INDEX IF NOT EXISTS ix_ff_device_name_trgm  ON fact_findings USING GIN (device_name gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_computer_trgm     ON fact_findings USING GIN (computer_name gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_cve_trgm          ON fact_findings USING GIN (cve gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_asset_trgm        ON fact_findings USING GIN (asset_id gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_detection_trgm    ON fact_findings USING GIN (detection_id gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_device_ip_trgm    ON fact_findings USING GIN (device_ip_address gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_details_trgm      ON fact_findings USING GIN (details gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_ff_comments_trgm     ON fact_findings USING GIN (comments gin_trgm_ops);
+-- These need the pg_trgm extension. On managed hosts where it isn't allow-listed
+-- (e.g. Azure unless you add PG_TRGM to azure.extensions) we skip them rather than
+-- failing the install — search still works, just without index acceleration.
+DO $trgm$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+        CREATE INDEX IF NOT EXISTS ix_ff_device_name_trgm  ON fact_findings USING GIN (device_name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_computer_trgm     ON fact_findings USING GIN (computer_name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_cve_trgm          ON fact_findings USING GIN (cve gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_asset_trgm        ON fact_findings USING GIN (asset_id gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_detection_trgm    ON fact_findings USING GIN (detection_id gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_device_ip_trgm    ON fact_findings USING GIN (device_ip_address gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_details_trgm      ON fact_findings USING GIN (details gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS ix_ff_comments_trgm     ON fact_findings USING GIN (comments gin_trgm_ops);
+  ELSE
+    RAISE WARNING 'pg_trgm not installed — skipping text-search indexes (search will be slower).';
+  END IF;
+END $trgm$;
 
 -- =====================================================================
 --  OPTIONAL — only if this table will hold many millions of rows.
