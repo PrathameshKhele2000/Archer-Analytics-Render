@@ -32,7 +32,7 @@ export default function ViewsTab() {
   const [datasets, setDatasets] = useState<{ key: string; name: string }[]>([]);
   const [schema, setSchema] = useState<DatasetSchema | null>(null); // for the draft's dataset
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [matches, setMatches] = useState<number | null>(null);
+  const [matches, setMatches] = useState<{ total: number; capped: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -208,7 +208,7 @@ export default function ViewsTab() {
             <div className="field-label">Which records (preset filter)</div>
             <p className="muted small">
               Users can narrow this further, but never see outside it.
-              {matches !== null && <> This view currently matches <b>{matches.toLocaleString()}</b> records.</>}
+              {matches !== null && <> This view currently matches <b>{matches.total.toLocaleString()}{matches.capped ? "+" : ""}</b> records.</>}
             </p>
             {schema
               ? <FilterConditions conditions={draft.conditions} logic={draft.logic} catalog={schema}

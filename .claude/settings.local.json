@@ -165,7 +165,8 @@
       "Bash(sed -n '/interface ReportContext/,/^}/p' backend/src/reports/report.entity.ts)",
       "Bash(sed -n '/private async contextFor/,/^  }/p' backend/src/reports/reports.service.ts)",
       "Bash(curl -s -i -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
-      "Bash(lsof -nP -iTCP:5433 -sTCP:LISTEN)"
+      "Bash(lsof -nP -iTCP:5433 -sTCP:LISTEN)",
+      "Bash(awk '{print \"disk free: \"$4}')"
     ]
   }
 }

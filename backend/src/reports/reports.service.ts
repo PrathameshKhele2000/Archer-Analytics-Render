@@ -99,15 +99,15 @@ export class ReportsService implements OnApplicationBootstrap {
    */
   private async findingsData(key: string, ctx: ReportContext, q: FindingsQuery) {
     const respKey = `report:${key}:data:${JSON.stringify(q)}`;
-    const cached = await this.cache.getJson<{ total: number; page: number; size: number; rows: any[] }>(respKey);
+    const cached = await this.cache.getJson<{ total: number; totalCapped?: boolean; page: number; size: number; rows: any[] }>(respKey);
     if (cached) return cached;
 
     const countKey = `report:${key}:count:${JSON.stringify({ c: q.conditions ?? [], l: q.logic ?? null, s: q.search ?? "", cf: q.colFilters ?? {}, bc: q.baseConditions ?? [], bl: q.baseLogic ?? null })}`;
     // Run count + page together via Promise.all so a rejection in either (e.g. a bad
     // filter field -> 400) is handled — never a leaked unhandled rejection that crashes.
-    const [total, rows] = await Promise.all([
+    const [count, rows] = await Promise.all([
       (async () => {
-        const cachedCount = await this.cache.getJson<number>(countKey);
+        const cachedCount = await this.cache.getJson<{ total: number; capped: boolean }>(countKey);
         if (cachedCount != null) return cachedCount;
         const t = await this.repo.countFindings(ctx, q);
         await this.cache.setJson(countKey, t, 1800); // 30 min; invalidated on sync
@@ -115,7 +115,7 @@ export class ReportsService implements OnApplicationBootstrap {
       })(),
       this.repo.pageFindings(ctx, q),
     ]);
-    const result = { total, page: q.page, size: q.size, rows };
+    const result = { total: count.total, totalCapped: count.capped, page: q.page, size: q.size, rows };
     await this.cache.setJson(respKey, result, 60);
     return result;
   }
@@ -214,7 +214,10 @@ export class ReportsService implements OnApplicationBootstrap {
       baseFrom: catalog.baseFrom, searchable: catalog.searchable, sortable: catalog.sortable,
       filterFields: catalog.filterFields, selectCols: [], defaultSortExpr: "f.record_id",
     };
-    return this.repo.countFindings(ctx, { page: 1, size: 1, conditions: conditions ?? [], logic: logic ?? undefined });
+    const { total, capped } = await this.repo.countFindings(ctx, {
+      page: 1, size: 1, conditions: conditions ?? [], logic: logic ?? undefined,
+    });
+    return { total, capped };
   }
 
   listViews() {

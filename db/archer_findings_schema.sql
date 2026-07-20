@@ -221,6 +221,27 @@ CREATE INDEX IF NOT EXISTS ix_ff_record_status  ON fact_findings (record_status)
 -- Dates & numbers used in ranges / sorting:
 CREATE INDEX IF NOT EXISTS ix_ff_last_updated   ON fact_findings (last_updated DESC);
 CREATE INDEX IF NOT EXISTS ix_ff_first_found    ON fact_findings (first_found_date);
+
+-- ---------------------------------------------------------------------
+-- Records-list SORT indexes: (column, record_id).
+-- The app orders by "<column> <dir>, record_id <dir>", so ONE plain composite
+-- index serves BOTH ascending and descending (forward / backward Index Only Scan).
+-- Without these, clicking a column header makes Postgres sort the WHOLE table to
+-- return 25 rows — measured at 10M rows: 7.6 s each, vs ~13 ms with the index.
+-- These cover the columns shown by default in the Records list; add more if users
+-- routinely sort by other fields.
+-- ---------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS ix_ff_sort_first_found  ON fact_findings (first_found_date, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_closed_date  ON fact_findings (closed_date, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_last_updated ON fact_findings (last_updated, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_days_open    ON fact_findings (days_open, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_priority     ON fact_findings (priority, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_age          ON fact_findings (age, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_device_status ON fact_findings (device_status, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_record_status ON fact_findings (record_status, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_cve_type     ON fact_findings (cve_type, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_device_name  ON fact_findings (device_name, record_id);
+CREATE INDEX IF NOT EXISTS ix_ff_sort_cve          ON fact_findings (cve, record_id);
 CREATE INDEX IF NOT EXISTS ix_ff_closed_date    ON fact_findings (closed_date);
 CREATE INDEX IF NOT EXISTS ix_ff_days_open      ON fact_findings (days_open);
 

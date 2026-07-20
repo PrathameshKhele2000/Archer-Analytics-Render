@@ -108,7 +108,7 @@ export interface TrendRow { month: string; created: number; closed: number; }
 export interface AgingRow { severity_name: string; d0_30: number; d31_90: number; d91_180: number; d180_plus: number; }
 /** A findings record: shape follows the Archer application fields (kept open-ended). */
 export type Finding = Record<string, any>;
-export interface Page { total: number; page: number; size: number; rows: Finding[]; }
+export interface Page { total: number; totalCapped?: boolean; page: number; size: number; rows: Finding[]; }
 export interface FilterOptions { severities: string[]; statuses: string[]; business_units: string[]; }
 export interface SyncState {
   module_alias: string; last_status: string; last_run_at: string | null; rows_synced: number;
@@ -415,8 +415,9 @@ export const api = {
       datasetSchema: (dataset: string) =>
         get<FieldsCatalog & { recordColumns: { key: string; label: string; numeric?: boolean }[] }>(
           `/api/admin/reports/dataset-schema?dataset=${encodeURIComponent(dataset)}`),
+      // `capped` = the real total is higher (counting stops past a cap for speed).
       matchCount: (datasetKey: string, conditions: FilterCondition[], logic?: string) =>
-        post<number>("/api/admin/reports/match-count", { datasetKey, conditions, logic }),
+        post<{ total: number; capped: boolean }>("/api/admin/reports/match-count", { datasetKey, conditions, logic }),
       create: (body: SaveViewBody) => post<RecordView>("/api/admin/reports/views", body),
       update: (id: number, body: SaveViewBody) =>
         request<RecordView>(`/api/admin/reports/views/${id}`, { method: "PUT", body: JSON.stringify(body) }),
