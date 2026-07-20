@@ -23,6 +23,7 @@ export interface ReportRow {
  * findings). All identifiers come from the catalog (validated), never raw input.
  */
 export interface ReportContext {
+  table: string;                          // the dataset's table, e.g. "fact_findings"
   baseFrom: string;                       // e.g. "FROM ds_devices f"
   searchable: Record<string, string>;     // column key -> SQL expr (cast to text)
   sortable: Record<string, string>;       // column key -> SQL expr

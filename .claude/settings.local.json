@@ -160,7 +160,12 @@
       "Bash(curl -s -o /dev/null -w \"login:          %{http_code}\\\\n\" -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
       "Bash(awk '{print \"file size:\", $5}')",
       "Bash(awk '/^COPY public.fact_findings /{f=1;c=0;next} f&&/^\\\\\\\\\\\\.$/{print c; f=0} f{c++}' azure_db_dump.sql)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(open -a Docker)",
+      "Bash(sed -n '/interface ReportContext/,/^}/p' backend/src/reports/report.entity.ts)",
+      "Bash(sed -n '/private async contextFor/,/^  }/p' backend/src/reports/reports.service.ts)",
+      "Bash(curl -s -i -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(lsof -nP -iTCP:5433 -sTCP:LISTEN)"
     ]
   }
 }

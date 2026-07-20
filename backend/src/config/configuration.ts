@@ -30,7 +30,9 @@ export default (): AppConfig => ({
   databaseUrl:
     process.env.DATABASE_URL ??
     "postgresql://archer:archer@db:5432/archer_analytics",
-  redisUrl: process.env.REDIS_URL ?? "redis://cache:6379/0",
+  // Empty = no cache. Don't default to a host that may not exist: an unreachable
+  // Redis would add connection-retry latency to every cached request.
+  redisUrl: process.env.REDIS_URL ?? "",
   cacheTtlSeconds: parseInt(process.env.CACHE_TTL_SECONDS ?? "900", 10),
   syncIntervalMinutes: parseInt(process.env.SYNC_INTERVAL_MINUTES ?? "15", 10),
   mssql: {

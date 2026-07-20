@@ -75,6 +75,7 @@ export class ReportsService implements OnApplicationBootstrap {
     if (!keys.length) keys.push(...catalog.defaultRecordCols.filter((k) => catalog.recordFields[k]));
     if (!keys.includes("record_id") && catalog.recordFields["record_id"]) keys.unshift("record_id");
     return {
+      table: catalog.table,
       baseFrom: catalog.baseFrom,
       searchable: catalog.searchable,
       sortable: catalog.sortable,
@@ -209,6 +210,7 @@ export class ReportsService implements OnApplicationBootstrap {
   async matchCount(datasetKey: string, conditions: any[], logic?: string | null) {
     const catalog = await this.catalogs.forDataset(datasetKey);
     const ctx: ReportContext = {
+      table: catalog.table,
       baseFrom: catalog.baseFrom, searchable: catalog.searchable, sortable: catalog.sortable,
       filterFields: catalog.filterFields, selectCols: [], defaultSortExpr: "f.record_id",
     };

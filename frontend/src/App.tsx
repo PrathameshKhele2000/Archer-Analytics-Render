@@ -1,12 +1,17 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api, DashboardMeta, ReportMeta, setUnauthorizedHandler } from "./api";
 import { consumeSsoHashTokens, hasPermission, SafeUser, tokenStore } from "./auth";
-import AdminPanel from "./components/AdminPanel";
-import ArchitecturePage from "./components/ArchitecturePage";
-import DashboardBuilder from "./components/DashboardBuilder";
-import DashboardView from "./components/DashboardView";
 import Login from "./components/Login";
-import ReportView from "./components/ReportView";
+
+// Loaded on demand: these pull in the heavy chart library (~1 MB). Keeping them out
+// of the initial bundle means the login screen and first paint stay small and fast.
+const AdminPanel = lazy(() => import("./components/AdminPanel"));
+const ArchitecturePage = lazy(() => import("./components/ArchitecturePage"));
+const DashboardBuilder = lazy(() => import("./components/DashboardBuilder"));
+const DashboardView = lazy(() => import("./components/DashboardView"));
+const ReportView = lazy(() => import("./components/ReportView"));
+
+const Loading = () => <div className="loading">loading…</div>;
 
 type Section = "dashboard" | "reports" | "admin";
 
@@ -53,7 +58,13 @@ export default function App() {
   }, [user]);
 
   if (!checked) return <div className="loading">loading…</div>;
-  if (showArch) return <ArchitecturePage onBack={() => setShowArch(false)} authed={!!user} />;
+  if (showArch) {
+    return (
+      <Suspense fallback={<Loading />}>
+        <ArchitecturePage onBack={() => setShowArch(false)} authed={!!user} />
+      </Suspense>
+    );
+  }
   if (!user) return <Login onSuccess={() => api.auth.me().then(setUser)} ssoError={ssoError} onShowArchitecture={() => setShowArch(true)} />;
 
   const canAdmin = ["admin:users:manage", "admin:roles:manage", "sync:read", "audit:read"].some((p) =>
@@ -106,6 +117,7 @@ export default function App() {
         </div>
       </header>
 
+      <Suspense fallback={<Loading />}>
       {section === "dashboard" && (
         building ? (
           <DashboardBuilder
@@ -154,6 +166,7 @@ export default function App() {
       )}
 
       {section === "admin" && <AdminPanel permissions={user.permissions} currentUserId={user.id} />}
+      </Suspense>
     </div>
   );
 }

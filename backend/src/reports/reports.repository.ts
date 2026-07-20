@@ -141,6 +141,22 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
   /** Exact matching-row count (the expensive part over big tables — cache it). */
   async countFindings(ctx: ReportContext, q: FindingsQuery): Promise<number> {
     const { where, params } = whereFor(ctx, q);
+
+    // Fast path for VERY large tables only. With no WHERE, an exact count(*) must scan
+    // every row; past a few million that costs seconds. Postgres' own estimate is
+    // instant but drifts ~1% between ANALYZEs, so we only accept it when the table is
+    // big enough that the exact count would actually hurt. Below the threshold we keep
+    // the exact number (a 100k count(*) takes ~25ms — accuracy is worth more).
+    const ESTIMATE_ABOVE_ROWS = 2_000_000;
+    if (!where) {
+      const est = await this.query<{ n: number }>(
+        `SELECT reltuples::bigint AS n FROM pg_class WHERE oid = $1::regclass`,
+        [ctx.table],
+      ).catch(() => null);
+      const n = Number(est?.rows?.[0]?.n ?? -1);
+      if (n >= ESTIMATE_ABOVE_ROWS) return n;
+    }
+
     const { rows } = await this.query<{ count: number }>(
       `SELECT count(*)::bigint AS count ${ctx.baseFrom} ${where}`,
       params,
