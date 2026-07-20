@@ -108,7 +108,7 @@ export interface TrendRow { month: string; created: number; closed: number; }
 export interface AgingRow { severity_name: string; d0_30: number; d31_90: number; d91_180: number; d180_plus: number; }
 /** A findings record: shape follows the Archer application fields (kept open-ended). */
 export type Finding = Record<string, any>;
-export interface Page { total: number; totalCapped?: boolean; page: number; size: number; rows: Finding[]; }
+export interface Page { total: number; totalCapped?: boolean; totalEstimated?: boolean; page: number; size: number; rows: Finding[]; }
 export interface FilterOptions { severities: string[]; statuses: string[]; business_units: string[]; }
 export interface SyncState {
   module_alias: string; last_status: string; last_run_at: string | null; rows_synced: number;

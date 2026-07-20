@@ -99,7 +99,7 @@ export class ReportsService implements OnApplicationBootstrap {
    */
   private async findingsData(key: string, ctx: ReportContext, q: FindingsQuery) {
     const respKey = `report:${key}:data:${JSON.stringify(q)}`;
-    const cached = await this.cache.getJson<{ total: number; totalCapped?: boolean; page: number; size: number; rows: any[] }>(respKey);
+    const cached = await this.cache.getJson<{ total: number; totalCapped?: boolean; totalEstimated?: boolean; page: number; size: number; rows: any[] }>(respKey);
     if (cached) return cached;
 
     const countKey = `report:${key}:count:${JSON.stringify({ c: q.conditions ?? [], l: q.logic ?? null, s: q.search ?? "", cf: q.colFilters ?? {}, bc: q.baseConditions ?? [], bl: q.baseLogic ?? null })}`;
@@ -107,7 +107,7 @@ export class ReportsService implements OnApplicationBootstrap {
     // filter field -> 400) is handled — never a leaked unhandled rejection that crashes.
     const [count, rows] = await Promise.all([
       (async () => {
-        const cachedCount = await this.cache.getJson<{ total: number; capped: boolean }>(countKey);
+        const cachedCount = await this.cache.getJson<{ total: number; capped: boolean; estimated?: boolean }>(countKey);
         if (cachedCount != null) return cachedCount;
         const t = await this.repo.countFindings(ctx, q);
         await this.cache.setJson(countKey, t, 1800); // 30 min; invalidated on sync
@@ -115,7 +115,7 @@ export class ReportsService implements OnApplicationBootstrap {
       })(),
       this.repo.pageFindings(ctx, q),
     ]);
-    const result = { total: count.total, totalCapped: count.capped, page: q.page, size: q.size, rows };
+    const result = { total: count.total, totalCapped: count.capped, totalEstimated: count.estimated ?? false, page: q.page, size: q.size, rows };
     await this.cache.setJson(respKey, result, 60);
     return result;
   }

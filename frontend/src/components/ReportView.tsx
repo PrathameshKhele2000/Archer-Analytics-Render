@@ -151,7 +151,7 @@ export default function ReportView({ reportKey }: { reportKey: string }) {
           />
           <div className="pager">
             <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</button>
-            <span>page {data.page} of {pages} · {data.rows.length.toLocaleString()} shown of {data.total.toLocaleString()}{data.totalCapped ? "+" : ""}</span>
+            <span>page {data.page} of {pages} · {data.rows.length.toLocaleString()} shown of {data.totalEstimated ? "~" : ""}{data.total.toLocaleString()}{data.totalCapped ? "+" : ""}</span>
             <button disabled={page >= pages} onClick={() => setPage(page + 1)}>Next</button>
             <label className="page-size">
               Rows

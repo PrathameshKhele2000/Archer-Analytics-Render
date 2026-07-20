@@ -148,7 +148,9 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
    * the UI shows "10,000+". Same trick every large search engine uses.
    * Returns `capped: true` when the real total is higher than the number returned.
    */
-  async countFindings(ctx: ReportContext, q: FindingsQuery): Promise<{ total: number; capped: boolean }> {
+  async countFindings(
+    ctx: ReportContext, q: FindingsQuery,
+  ): Promise<{ total: number; capped: boolean; estimated?: boolean }> {
     const { where, params } = whereFor(ctx, q);
 
     // No filter at all: use Postgres' own row estimate on very large tables (instant).
@@ -161,7 +163,9 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
         [ctx.table],
       ).catch(() => null);
       const n = Number(est?.rows?.[0]?.n ?? -1);
-      if (n >= ESTIMATE_ABOVE_ROWS) return { total: n, capped: false };
+      // Flag it as an estimate so the UI can show "~10,000,000" — otherwise the number
+      // looks wrong (it's off by a fraction of a percent and drifts between loads).
+      if (n >= ESTIMATE_ABOVE_ROWS) return { total: n, capped: false, estimated: true };
 
       const { rows } = await this.query<{ count: number }>(
         `SELECT count(*)::bigint AS count ${ctx.baseFrom} ${where}`,
