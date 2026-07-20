@@ -162,6 +162,19 @@ export class CatalogService {
       };
     }
 
+    // Safety net: if a dataset has NOTHING flagged searchable, the only entry here is
+    // record_id — and global search then builds an empty OR list, silently drops the
+    // term and returns every row ("search does nothing"). Fall back to every text-ish
+    // column so search always actually searches, whatever the registry flags say.
+    const hasSearchableField = Object.keys(catalog.searchable).some((k) => k !== "record_id");
+    if (!hasSearchableField) {
+      for (const f of fields) {
+        if (f.data_type !== "text" && f.data_type !== "json") continue;
+        const col = ident(f.key);
+        catalog.searchable[col] = f.data_type === "text" ? `f.${col}` : `f.${col}::text`;
+      }
+    }
+
     // count(*) is always available.
     catalog.measures.count = { key: "count", label: "Number of records", expr: "count(*)" };
 

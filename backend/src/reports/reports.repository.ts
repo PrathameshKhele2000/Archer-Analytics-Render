@@ -45,15 +45,22 @@ function whereFor(ctx: ReportContext, f: FindingsFilter): { where: string; param
 
   const term = (f.search ?? "").trim();
   if (term) {
-    params.push(`%${term}%`);
-    const p = `$${params.length}`;
     // Global search ORs an ILIKE across every searchable text column (each backed by a
     // trigram index). record_id is numeric — a `::text ILIKE` on it can never use an
     // index and would force a seq scan, so we skip it here and add an exact id match
     // only when the term is a plain number.
-    const ors = Object.entries(ctx.searchable)
-      .filter(([key]) => key !== "record_id")
-      .map(([, e]) => `${e} ILIKE ${p}`);
+    //
+    // Only push a parameter once we know a clause will actually reference it: pushing
+    // it unconditionally and then adding no clause makes Postgres reject the query
+    // ("bind message supplies 1 parameters, but prepared statement requires 0") — a 500
+    // on every search for any dataset with no searchable columns.
+    const ors: string[] = [];
+    const searchCols = Object.entries(ctx.searchable).filter(([key]) => key !== "record_id");
+    if (searchCols.length) {
+      params.push(`%${term}%`);
+      const p = `$${params.length}`;
+      ors.push(...searchCols.map(([, e]) => `${e} ILIKE ${p}`));
+    }
     if (/^\d+$/.test(term)) {
       params.push(Number(term));
       ors.push(`f.record_id = $${params.length}`);
