@@ -39,6 +39,19 @@ async function authHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * A failed HTTP call, carrying the status so callers can tell "you got it wrong"
+ * (4xx) apart from "the server is broken" (5xx) instead of showing one message for
+ * both. The `message` stays the same string as before, so existing `e.message`
+ * handling is unaffected.
+ */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const res = await fetch(apiUrl(path), {
     ...init,
@@ -52,7 +65,7 @@ async function request<T>(path: string, init: RequestInit = {}, retried = false)
     onUnauthorized?.();
     throw new Error("Session expired");
   }
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (!res.ok) throw new ApiError(`${path} -> ${res.status}`, res.status);
   // Tolerate empty bodies (e.g. a 200 from a void DELETE) instead of failing on JSON.parse.
   if (res.status === 204) return undefined as T;
   const text = await res.text();

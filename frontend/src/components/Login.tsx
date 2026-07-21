@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { tokenStore } from "../auth";
 
 export default function Login({ onSuccess, ssoError, onShowArchitecture }: { onSuccess: () => void; ssoError?: string; onShowArchitecture: () => void }) {
@@ -21,8 +21,14 @@ export default function Login({ onSuccess, ssoError, onShowArchitecture }: { onS
       const { accessToken, refreshToken } = await api.auth.login(email, password);
       tokenStore.set(accessToken, refreshToken);
       onSuccess();
-    } catch {
-      setError("Invalid email or password.");
+    } catch (e) {
+      // Only 401 means the credentials were actually wrong. Anything else — the API
+      // unreachable, a 500 from a missing migration — used to show the same
+      // "invalid password" message and send people hunting for the wrong problem.
+      const status = e instanceof ApiError ? e.status : 0;
+      if (status === 401) setError("Invalid email or password.");
+      else if (status >= 500) setError("The server could not process the sign-in. Please contact your administrator.");
+      else setError("Could not reach the server. Check your connection and try again.");
     } finally {
       setBusy(false);
     }

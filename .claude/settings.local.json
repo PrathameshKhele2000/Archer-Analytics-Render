@@ -204,7 +204,18 @@
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -f db/access_control.sql)",
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT tablename FROM pg_tables WHERE tablename LIKE 'user_group%' ORDER BY 1\")",
       "Bash(python3 -c 'import sys,json *)",
-      "Bash(python3 -c 'import sys,json;print\\(\"  dashboards:\",[d[\"name\"] for d in json.load\\(sys.stdin\\)]\\)')"
+      "Bash(python3 -c 'import sys,json;print\\(\"  dashboards:\",[d[\"name\"] for d in json.load\\(sys.stdin\\)]\\)')",
+      "Bash(curl -s -o /tmp/l1.json -w 'http=%{http_code}\\\\n' -X POST localhost:8000/api/auth/login -H 'content-type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(curl -s -o /tmp/l2.json -w 'http=%{http_code}\\\\n' -X POST localhost:3000/api/auth/login -H 'content-type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"ALTER TABLE user_group_member RENAME TO user_group_member_bak;\")",
+      "Bash(curl -s -o /tmp/l3.json -w 'http=%{http_code}\\\\n' -X POST localhost:8000/api/auth/login -H 'content-type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"ALTER TABLE user_group_member_bak RENAME TO user_group_member;\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"DROP TABLE IF EXISTS user_group_member, user_group_role, user_group CASCADE; ALTER TABLE reports DROP COLUMN IF EXISTS row_limit;\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT count\\(*\\) FROM pg_tables WHERE tablename LIKE 'user_group%'\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT column_name FROM information_schema.columns WHERE table_name='reports' AND column_name='row_limit'\")",
+      "Bash(curl -s -o /tmp/li.json -w 'http=%{http_code}\\\\n' -X POST localhost:3000/api/auth/login -H 'content-type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(python3 -c 'import json;print\\(json.load\\(open\\(\"/tmp/li.json\"\\)\\)[\"accessToken\"]\\)')",
+      "Bash(curl -s localhost:8000/api/auth/me -H 'authorization: Bearer __TRACKED_VAR__')"
     ]
   }
 }
