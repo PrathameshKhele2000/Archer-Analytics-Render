@@ -54,7 +54,8 @@ export interface ChartSpec {
   /** Which dataset this chart reads (defaults to the findings dataset). */
   dataset?: string | null;
   chartType: string;
-  mode?: "aggregate" | "compare"; // aggregate = Calculate Values; compare = Compare Fields
+  // aggregate = Calculate Values | compare = Compare Fields | clause = Group & Count
+  mode?: "aggregate" | "compare" | "clause";
   dimension?: string | null; // X axis
   series?: string | null; // legacy single "Group By" (superseded by groupBy)
   groupBy?: string[] | null; // multilevel Group By (aggregate mode) — combined into the series
@@ -156,7 +157,16 @@ export function validateSpec(spec: ChartSpec, catalog: Catalog): void {
     return;
   }
 
-  if (spec.mode === "compare") {
+  if (spec.mode === "clause") {
+    // Group & Count: only grouping levels + a measure. No X/Y axis at all.
+    const levels = groupByKeys(spec);
+    if (!levels.length) throw new BadRequestException("Group & Count needs at least one Group By level");
+    if (levels.length > 4) throw new BadRequestException("At most 4 Group By levels");
+    for (const g of levels) {
+      if (!catalog.dimensions[g]) throw new BadRequestException(`Unknown Group By dimension '${g}'`);
+    }
+    if (!catalog.measures[spec.measure]) throw new BadRequestException(`Unknown measure '${spec.measure}'`);
+  } else if (spec.mode === "compare") {
     // Compare Fields: X field × Y field, value = count. Y (compareField) becomes the series.
     if (!chart.supportsSeries) {
       throw new BadRequestException("Compare Fields needs a column, bar, line, area or table chart");
@@ -214,10 +224,31 @@ function buildAggregationCore(spec: ChartSpec, catalog: Catalog, opts: AggOpts =
   validateSpec(spec, catalog);
   const chart = CHART_TYPES[spec.chartType];
   const isCompare = spec.mode === "compare";
-  // Compare Fields counts records per X×Y pair; Calculate Values uses the chosen aggregate.
-  const measureExpr = isCompare ? "count(*)" : catalog.measures[spec.measure].expr;
+  // Every mode uses the chosen aggregate (Compare Fields used to be hard-wired to a
+  // record count, which made it impossible to compare sums/averages across two fields).
+  const measureExpr = (catalog.measures[spec.measure] ?? catalog.measures.count).expr;
   const { where, params } = buildChartWhere(spec, catalog, opts.drill);
   const limit = resolveLimit(spec.limit);
+
+  // ---- Clause (Group & Count): no X/Y, just N grouping levels + the measure. Each
+  // level becomes its own column (g0, g1, ...) so the UI can render a real table.
+  if (spec.mode === "clause" && !opts.dimensionOverride) {
+    const levels = groupByKeys(spec);
+    const exprs = levels.map((k) => catalog.dimensions[k].expr);
+    const cols = exprs.map((e, i) => `${e} AS g${i}`);
+    cols.push(`${measureExpr} AS y`);
+    return {
+      sql: `
+    SELECT ${cols.join(", ")}
+    ${catalog.baseFrom}
+    ${where}
+    GROUP BY ${exprs.join(", ")}
+    ORDER BY ${exprs.map((_, i) => `g${i}`).join(", ")}
+    LIMIT ${limit}
+  `,
+      params,
+    };
+  }
 
   const dimKey = opts.dimensionOverride ?? spec.dimension;
   // Single-value chart with no grouping dimension (aggregate mode only).

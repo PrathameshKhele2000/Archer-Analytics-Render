@@ -169,7 +169,12 @@
       "Bash(awk '{print \"disk free: \"$4}')",
       "Bash(echo \"  completed. sort indexes: $\\(docker exec trgmtest psql -U postgres -d t -tAc \"select count\\(*\\) from pg_indexes where tablename='fact_findings' and indexname like 'ix_ff_sort%'\"\\)  trigram indexes: $\\(docker exec trgmtest psql -U postgres -d t -tAc \"select count\\(*\\) from pg_indexes where tablename='fact_findings' and indexname like '%trgm%'\"\\)\")",
       "Bash(sed -n '/async createChart/,/^  }/p' backend/src/dashboard/dashboard.service.ts)",
-      "Bash(sed -n '/private async syncChartMatview/,/^  }/p' backend/src/dashboard/dashboard.service.ts)"
+      "Bash(sed -n '/private async syncChartMatview/,/^  }/p' backend/src/dashboard/dashboard.service.ts)",
+      "Bash(grep -nA22 \"interface ChartSpec\" backend/src/dashboard/query-builder.ts)",
+      "Bash(sed -n '/function validateSpec/,/^}/p' backend/src/dashboard/query-builder.ts)",
+      "Bash(sed -n '/function groupByKeys/,/^}/p' backend/src/dashboard/query-builder.ts)",
+      "Bash(grep -nA14 \"previewQuery\\\\|async preview\" backend/src/dashboard/dashboard.service.ts)",
+      "Bash(curl -s -o /dev/null http://localhost:8003/api/health)"
     ]
   }
 }

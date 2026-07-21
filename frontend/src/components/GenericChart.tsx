@@ -188,9 +188,47 @@ interface GenericChartProps {
   onSliceClick?: (name: string) => void;
   /** When set, the parent controls which series are hidden (and renders the legend itself). */
   hidden?: Set<string>;
+  /** Column headers for Group & Count (clause) rows, one per grouping level. */
+  clauseLevels?: string[];
 }
 
-export default function GenericChart({ type, rows, showLegend, onSliceClick, hidden }: GenericChartProps) {
+export default function GenericChart({ type, rows: rawRows, showLegend, onSliceClick, hidden, clauseLevels }: GenericChartProps) {
+  let rows = rawRows;
+  // Group & Count (clause) rows carry one column per grouping level: g0, g1, ... + y.
+  const isClauseRows = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], "g0");
+  if (isClauseRows) {
+    const levelCount = Object.keys(rows[0]).filter((k) => /^g\d+$/.test(k)).length;
+    const headers = Array.from({ length: levelCount }, (_, i) => clauseLevels?.[i] ?? `Level ${i + 1}`);
+
+    // A table shows every level in its own column — the clearest form for a breakdown.
+    if (type === "table") {
+      return (
+        <div className="chart chart-table">
+          <table className="findings">
+            <thead>
+              <tr>{headers.map((h, i) => <th key={i}>{h}</th>)}<th>Value</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r: any, i) => (
+                <tr key={i}>
+                  {headers.map((_, l) => <td key={l}>{r[`g${l}`] ?? "—"}</td>)}
+                  <td className="num">{Number(r.y).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    // Any other chart type: fold the levels into one readable label per bar/slice
+    // ("Green / Application"), so the groups are actually visible on the chart.
+    rows = rows.map((r: any) => ({
+      x: Array.from({ length: levelCount }, (_, l) => r[`g${l}`] ?? "—").join(" / "),
+      y: r.y,
+    })) as QueryRow[];
+  }
+
   // 'number' and 'table' render as plain HTML, not ECharts.
   if (type === "number") {
     const value = rows[0]?.y ?? 0;

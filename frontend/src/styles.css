@@ -753,3 +753,9 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
   .arch-highlights { grid-template-columns: 1fr; }
   .type-gallery { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* Chart editor: aggregate function + field, and the mode hint */
+.agg-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.agg-row .builder-field { flex: 1 1 150px; min-width: 140px; }
+.mode-hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 2px 0 2px; }
+@media (max-width: 700px) { .agg-row { flex-direction: column; align-items: stretch; } }

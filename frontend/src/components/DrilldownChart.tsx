@@ -193,6 +193,7 @@ export default function DrilldownChart({
           rows={rows}
           showLegend={spec.showLegend}
           hidden={hidden}
+          clauseLevels={spec.mode === "clause" ? (spec.groupBy ?? []).map(humanize) : undefined}
           onSliceClick={drillEnabled ? onSectionClick : undefined}
         />
       )}

@@ -248,7 +248,7 @@ export interface ChartSpec {
   /** Which dataset the chart reads; omitted = the findings dataset. */
   dataset?: string | null;
   chartType: string;
-  mode?: "aggregate" | "compare";
+  mode?: "aggregate" | "compare" | "clause";
   dimension?: string | null;
   series?: string | null;
   groupBy?: string[] | null;

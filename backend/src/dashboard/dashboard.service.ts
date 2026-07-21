@@ -111,16 +111,27 @@ export class DashboardService {
 
   /** Live preview: run an ad-hoc chart spec without saving it. */
   async previewQuery(spec: ChartSpecDto) {
+    // The chart designer re-previews on every edit, and each preview is a full
+    // aggregation over the dataset (seconds on a big table). Cache by the exact spec so
+    // tweaking a title, flipping chart type back and forth, or re-opening a chart is
+    // instant instead of re-scanning millions of rows.
+    const cacheKey = `dash:preview:${JSON.stringify(spec)}`;
+    const cached = await this.cache.getJson<{ rows: any[]; columns?: any[] }>(cacheKey);
+    if (cached) return cached;
+
     // Table = records list: return raw records + the resolved column set.
     const catalog = await this.catalogFor(spec as ChartSpec);
+    let result: { rows: any[]; columns?: any[] };
     if ((spec as ChartSpec).chartType === "table") {
       const { sql, params, columns } = buildRecordsChartQuery(spec as ChartSpec, catalog);
       const rows = await this.repo.runAggregation(sql, params);
-      return { rows, columns: columns.map((c) => ({ key: c.key, label: c.label, numeric: !!c.numeric })) };
+      result = { rows, columns: columns.map((c) => ({ key: c.key, label: c.label, numeric: !!c.numeric })) };
+    } else {
+      const { sql, params } = buildAggregation(spec as ChartSpec, catalog);
+      result = { rows: await this.repo.runAggregation(sql, params) };
     }
-    const { sql, params } = buildAggregation(spec as ChartSpec, catalog);
-    const rows = await this.repo.runAggregation(sql, params);
-    return { rows };
+    await this.cache.setJson(cacheKey, result, 300); // 5 min; invalidated on sync
+    return result;
   }
 
   /** Validate a chart spec (throws 400 on bad keys), for either the aggregation or records path. */

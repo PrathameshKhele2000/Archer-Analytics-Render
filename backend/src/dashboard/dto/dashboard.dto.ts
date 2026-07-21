@@ -149,9 +149,9 @@ export class ChartSpecDto {
   @IsNotEmpty()
   chartType!: string;
 
-  @IsIn(["aggregate", "compare"])
+  @IsIn(["aggregate", "compare", "clause"])
   @IsOptional()
-  mode?: "aggregate" | "compare";
+  mode?: "aggregate" | "compare" | "clause";
 
   @IsString()
   @IsOptional()
