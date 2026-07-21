@@ -144,7 +144,7 @@ export default function ArchitecturePage({ onBack, authed }: { onBack: () => voi
           <g className="node">
             <rect x="640" y="222" width="200" height="58" rx="7" />
             <text className="n-title" x="740" y="246">React SPA</text>
-            <text className="n-sub" x="740" y="264">Dashboards · Records · Admin</text>
+            <text className="n-sub" x="740" y="264">Dashboards · DataSets · Views · Admin</text>
           </g>
           <g className="node plat">
             <rect x="640" y="322" width="200" height="60" rx="7" />

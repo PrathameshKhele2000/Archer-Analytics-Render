@@ -16,6 +16,18 @@ export class RolesService {
     return this.repo.listPermissions();
   }
 
+  /** The views and dashboards a role can be granted read access to. */
+  listGrantableResources() {
+    return this.repo.listGrantableResources();
+  }
+
+  /** Replace the views/dashboards this role can read (read access only). */
+  async setResources(roleId: number, viewIds?: number[], dashboardIds?: number[]) {
+    await this.mustFind(roleId);
+    await this.repo.setResourceGrants(roleId, viewIds, dashboardIds);
+    return this.mustFind(roleId);
+  }
+
   async create(dto: CreateRoleDto) {
     const existing = await this.repo.findAll();
     if (existing.some((r) => r.name === dto.name)) {

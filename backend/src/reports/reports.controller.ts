@@ -1,34 +1,10 @@
-import { BadRequestException, Controller, Get, Param, Query, Res } from "@nestjs/common";
+import { Controller, Get, Param, Query, Res } from "@nestjs/common";
 import { Response } from "express";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Permissions } from "../common/decorators/permissions.decorator";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
-import { FilterCondition } from "./filterable-fields";
+import { parseColFilters, parseConditions } from "./query-params";
 import { ReportsService } from "./reports.service";
-
-/** Parse the `filters` query param (URL-encoded JSON array of numbered conditions). */
-function parseConditions(filtersJson?: string): FilterCondition[] {
-  if (!filtersJson) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(filtersJson);
-  } catch {
-    throw new BadRequestException("Invalid 'filters' JSON");
-  }
-  if (!Array.isArray(parsed)) throw new BadRequestException("'filters' must be a JSON array of conditions");
-  return parsed as FilterCondition[];
-}
-
-/** Parse the per-column search param (`cols`) — a JSON object of {columnKey: term}. */
-function parseColFilters(colsJson?: string): Record<string, string> {
-  if (!colsJson) return {};
-  try {
-    const parsed = JSON.parse(colsJson);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    throw new BadRequestException("Invalid 'cols' JSON");
-  }
-}
 
 @Controller("api/reports")
 @Permissions("report:read")

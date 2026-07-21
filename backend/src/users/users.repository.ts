@@ -3,13 +3,29 @@ import { DbService } from "../database/db.service";
 import { BaseRepository } from "../common/base.repository";
 import { UserRow } from "./user.entity";
 
+/**
+ * A user's EFFECTIVE roles: the ones assigned to them directly, plus the ones
+ * carried by every group they belong to. UNION (not UNION ALL) so a role held
+ * both ways still counts once. Everything downstream — the JWT roles array, the
+ * permissions array, dashboard/view access checks — reads through this, so group
+ * membership grants access without any other code knowing groups exist.
+ */
+const EFFECTIVE_ROLE_IDS = `
+  SELECT ur.role_id FROM user_roles ur WHERE ur.user_id = u.id
+  UNION
+  SELECT ugr.role_id
+    FROM user_group_member ugm
+    JOIN user_group_role ugr ON ugr.group_id = ugm.group_id
+   WHERE ugm.user_id = u.id
+`;
+
 const ENRICHED_SELECT = `
   SELECT u.*,
     coalesce(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}') AS roles,
     coalesce(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
   FROM users u
-  LEFT JOIN user_roles ur ON ur.user_id = u.id
-  LEFT JOIN roles r ON r.id = ur.role_id
+  LEFT JOIN LATERAL (${EFFECTIVE_ROLE_IDS}) er ON TRUE
+  LEFT JOIN roles r ON r.id = er.role_id
   LEFT JOIN role_permissions rp ON rp.role_id = r.id
   LEFT JOIN permissions p ON p.id = rp.permission_id
 `;
@@ -95,13 +111,14 @@ export class UsersRepository extends BaseRepository<UserRow> {
     await this.query(`DELETE FROM users WHERE id=$1`, [id]);
   }
 
-  /** How many active users hold the 'admin' role — used to prevent locking everyone out. */
+  /** How many active users hold the 'admin' role — used to prevent locking everyone out.
+   *  Counts effective admins, so someone who is admin only via a group still counts. */
   async countActiveAdmins(): Promise<number> {
     const { rows } = await this.query<{ n: string }>(
       `SELECT count(DISTINCT u.id) AS n
        FROM users u
-       JOIN user_roles ur ON ur.user_id = u.id
-       JOIN roles r ON r.id = ur.role_id
+       JOIN LATERAL (${EFFECTIVE_ROLE_IDS}) er ON TRUE
+       JOIN roles r ON r.id = er.role_id
        WHERE r.name = 'admin' AND u.is_active`,
     );
     return Number(rows[0]?.n ?? 0);

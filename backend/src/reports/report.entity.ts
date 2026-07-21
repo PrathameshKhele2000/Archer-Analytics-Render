@@ -12,6 +12,8 @@ export interface ReportRow {
   /** Preset scope of this view — ANDed with the user's own filters. */
   base_conditions: any[];
   base_logic: string | null;
+  /** Rows to show: null = every matching row; N = only the top N in the view's sort. */
+  row_limit: number | null;
   sort_order: number;
   created_at: string;
   updated_at: string;

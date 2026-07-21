@@ -85,6 +85,19 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
     return rows;
   }
 
+  /** Planner row estimate for a table (instant — no scan). -1 when never analyzed. */
+  async estimateRows(table: string): Promise<number> {
+    try {
+      const { rows } = await this.query<{ n: string }>(
+        `SELECT reltuples::bigint AS n FROM pg_class WHERE oid = $1::regclass`,
+        [table],
+      );
+      return Number(rows[0]?.n ?? -1);
+    } catch {
+      return -1;
+    }
+  }
+
   // ---- Per-chart materialized views (widgetId is a DB integer -> safe to interpolate) ----
 
   async createChartMatview(widgetId: number, selectSql: string): Promise<void> {

@@ -178,6 +178,8 @@ export interface RecordView {
   dataset_key: string;
   base_conditions: FilterCondition[];
   base_logic: string | null;
+  /** Rows to show: null = all matching rows, N = only the top N. */
+  row_limit: number | null;
   is_active: boolean;
   sort_order: number;
   columns: string[];
@@ -189,6 +191,8 @@ export interface SaveViewBody {
   description?: string;
   baseConditions?: FilterCondition[];
   baseLogic?: string | null;
+  /** Rows to show: null for all matching rows, or N for only the top N. */
+  rowLimit?: number | null;
   columns?: { key: string; label: string }[];
   roleIds?: number[];
   isActive?: boolean;
@@ -298,8 +302,56 @@ export interface OperatorDef { op: string; label: string; arity: 0 | 1 | 2 | -1;
 export interface FieldsCatalog { fields: FilterFieldDef[]; operators: Record<FieldType, OperatorDef[]>; }
 export interface FilterCondition { field: string; operator: string; value?: string; value2?: string; values?: string[]; }
 
-export interface Role { id: number; name: string; description: string | null; is_system: boolean; permissions: string[]; }
+/** A registered dataset as shown on the DataSets tab. */
+export interface DatasetSummary {
+  key: string;
+  name: string;
+  description: string | null;
+  sourceTable: string | null;
+  targetTable: string;
+  columnCount: number;
+  rowCount: number;
+  rowCountEstimated: boolean;
+  lastSyncedAt: string | null;
+}
+export interface DatasetColumn { key: string; label: string; numeric: boolean; sortable: boolean; searchable: boolean; }
+export interface DatasetSchema extends FieldsCatalog {
+  key: string;
+  name: string;
+  table: string;
+  defaultSort: string;
+  columns: DatasetColumn[];
+}
+
+export interface Role {
+  id: number; name: string; description: string | null; is_system: boolean; permissions: string[];
+  /** Views this role can read. */
+  view_ids: number[];
+  /** Dashboards this role can read. */
+  dashboard_ids: number[];
+}
 export interface Permission { id: number; code: string; description: string | null; }
+
+/** Things a role can be granted read access to, for the Access Control pickers. */
+export interface GrantableResource { id: number; key: string; name: string; }
+export interface GrantableResources { views: GrantableResource[]; dashboards: GrantableResource[]; }
+
+/** A named set of users that carries roles. */
+export interface UserGroup {
+  id: number;
+  name: string;
+  description: string | null;
+  role_ids: number[];
+  role_names: string[];
+  user_ids: number[];
+  member_count: number;
+}
+export interface SaveGroupBody {
+  name: string;
+  description?: string;
+  roleIds?: number[];
+  userIds?: number[];
+}
 export interface AuditEntry {
   id: number; user_id: number | null; user_email: string | null; action: string;
   entity_type: string | null; entity_id: string | null; method: string | null;
@@ -321,9 +373,12 @@ export const api = {
     schema: (dataset?: string) =>
       get<DashboardSchema>(`/api/dashboards/schema${dataset ? `?dataset=${encodeURIComponent(dataset)}` : ""}`),
     preview: (spec: ChartSpec) =>
-      post<{ rows: any[]; columns?: { key: string; label: string; numeric?: boolean }[] }>(
-        "/api/dashboards/query-preview", spec,
-      ),
+      post<{
+        rows: any[];
+        columns?: { key: string; label: string; numeric?: boolean }[];
+        /** True when the numbers came from a sample of a very large table (designer only). */
+        approximate?: boolean;
+      }>("/api/dashboards/query-preview", spec),
     create: (body: { name: string; description?: string }) =>
       post<DashboardMeta>("/api/dashboards", body),
     update: (key: string, body: { name?: string; description?: string }) =>
@@ -362,6 +417,20 @@ export const api = {
       download(`/api/reports/${key}/export/pdf?${new URLSearchParams(q)}`),
   },
 
+  /** Browsing raw dataset tables (the DataSets tab) — every mapped column, every row. */
+  datasets: {
+    list: () => get<DatasetSummary[]>("/api/datasets"),
+    schema: (key: string) => get<DatasetSchema>(`/api/datasets/${key}/schema`),
+    data: (key: string, q: Record<string, string>) =>
+      get<Page>(`/api/datasets/${key}/data?${new URLSearchParams(q)}`),
+    exportCsv: (key: string, q: Record<string, string>) =>
+      download(`/api/datasets/${key}/export/csv?${new URLSearchParams(q)}`),
+    exportExcel: (key: string, q: Record<string, string>) =>
+      download(`/api/datasets/${key}/export/excel?${new URLSearchParams(q)}`),
+    exportPdf: (key: string, q: Record<string, string>) =>
+      download(`/api/datasets/${key}/export/pdf?${new URLSearchParams(q)}`),
+  },
+
   sync: {
     status: () => get<SyncState[]>("/api/sync/status"),
     history: (limit = 25) => get<SyncHistoryRow[]>(`/api/sync/history?limit=${limit}`),
@@ -388,8 +457,20 @@ export const api = {
           method: "PUT",
           body: JSON.stringify({ permissionIds }),
         }),
+      resources: () => get<GrantableResources>("/api/admin/roles/resources"),
+      /** Grant read access to a set of views and/or dashboards (omit a list to leave it alone). */
+      setResources: (id: number, body: { viewIds?: number[]; dashboardIds?: number[] }) =>
+        request<Role>(`/api/admin/roles/${id}/resources`, { method: "PUT", body: JSON.stringify(body) }),
       remove: (id: number) => del<void>(`/api/admin/roles/${id}`),
       import: (roles: ImportRoleRow[]) => post<ImportSummary>("/api/admin/roles/import", { roles }),
+    },
+
+    groups: {
+      list: () => get<UserGroup[]>("/api/admin/groups"),
+      create: (body: SaveGroupBody) => post<UserGroup>("/api/admin/groups", body),
+      update: (id: number, body: SaveGroupBody) =>
+        request<UserGroup>(`/api/admin/groups/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+      remove: (id: number) => del<void>(`/api/admin/groups/${id}`),
     },
     source: {
       ping: () => get<{ ok: boolean; server?: string; error?: string }>("/api/admin/source/ping"),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ChartSpec, ChartTypeDef, DashboardSchema, FieldsCatalog, FilterCondition, QueryRow, RecordRow } from "../api";
 
 import FilterConditions from "./FilterConditions";
@@ -67,7 +67,13 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
     return aggField ? `${aggFn}_${aggField}` : "count";
   }, [aggFn, aggField, customMeasure]);
 
-  const [preview, setPreview] = useState<any[]>([]); // QueryRow[] for charts, RecordRow[] for the table (records list)
+  // Rows and the "was this sampled?" flag come from the same response, so they're held
+  // together — keeping them in separate state lets them drift out of sync.
+  // rows: QueryRow[] for charts, RecordRow[] for the table (records list).
+  const [result, setResult] = useState<{ rows: any[]; approximate: boolean }>({ rows: [], approximate: false });
+  const preview = result.rows;
+  const approximate = result.approximate;
+  const [previewing, setPreviewing] = useState(false); // a preview request is in flight
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<"chart" | "options" | "drill" | "filters">("chart");
@@ -89,7 +95,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
     setSchema(null);
     setDimension(""); setGroupBy([]); setCompareField(""); setAggFn("count"); setAggField(""); setCustomMeasure("");
     setConditions([]); setLogic(""); setDrilldown([]); setTableColumns(null);
-    setPreview([]); setError(null);
+    setResult({ rows: [], approximate: false }); setError(null);
   };
 
   /** The dataset's record columns (drives the table-chart column picker). */
@@ -139,7 +145,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
         ? `Number of records grouped by ${groupBy.map((g) => labelOf("dimensions", g)).join(" / ")}`
         : "Number of records";
     }
-    if (isCompare) return `${m}: ${labelOf("dimensions", dimension)} vs ${labelOf("dimensions", compareField)}`;
+    if (isCompare) return `${labelOf("dimensions", dimension)} vs ${labelOf("dimensions", compareField)}`;
     if (!needsDimension) return m;
     let c = `${m} by ${labelOf("dimensions", dimension)}`;
     if (supportsSeries && groupBy.length) c += `, split by ${groupBy.map((g) => labelOf("dimensions", g)).join(" / ")}`;
@@ -165,7 +171,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
     series: null,
     groupBy: (isClause || (!isCompare && supportsSeries)) ? groupBy : [],
     compareField: isCompare ? compareField : null,
-    measure: isClause ? "count" : measure, // Group & Count always counts records
+    measure: isClause || isCompare ? "count" : measure, // Grouping & Compare always count records
     conditions: conditions.length ? conditions : null,
     logic: logic.trim() || null,
     showLegend,
@@ -178,7 +184,8 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
   // Group By options: dimensions not on the X axis or already picked at an earlier level.
   const groupByOptions = (atIndex: number) =>
     (schema?.dimensions ?? []).filter(
-      (d) => d.key !== dimension && !groupBy.slice(0, atIndex).includes(d.key),
+      // In Grouping mode there is no X axis, so nothing is reserved by it.
+      (d) => (isClause || d.key !== dimension) && !groupBy.slice(0, atIndex).includes(d.key),
     );
 
   // Drill path options: dimensions not used as the X axis or an earlier level.
@@ -186,6 +193,8 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
     (schema?.dimensions ?? []).filter(
       (d) => d.key !== dimension && !drilldown.slice(0, atIndex).includes(d.key),
     );
+
+  const previewSeq = useRef(0);
 
   // Debounced live preview whenever the spec changes.
   useEffect(() => {
@@ -195,9 +204,17 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
     if (isClause && !groupBy.length) return;  // wait for at least one grouping level
     const t = setTimeout(() => {
       setError(null);
+      // Previews can take seconds on a big dataset, so responses may land out of order.
+      // Only the newest request is allowed to write to the preview.
+      const seq = ++previewSeq.current;
+      setPreviewing(true);
       api.dashboards.preview(spec)
-        .then((r) => setPreview(r.rows))
-        .catch((e) => setError(e.message ?? "Preview failed"));
+        .then((r) => {
+          if (seq !== previewSeq.current) return;
+          setResult({ rows: r.rows, approximate: !!r.approximate });
+        })
+        .catch((e) => { if (seq === previewSeq.current) setError(e.message ?? "Preview failed"); })
+        .finally(() => { if (seq === previewSeq.current) setPreviewing(false); });
     }, 250);
     return () => clearTimeout(t);
   }, [spec, schema, needsDimension, dimension, isClause, isCompare, compareField, groupBy]);
@@ -274,12 +291,12 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
                     <button type="button" className={mode === "compare" ? "active" : ""}
                             onClick={() => changeMode("compare")}>Compare Fields</button>
                     <button type="button" className={mode === "clause" ? "active" : ""}
-                            onClick={() => changeMode("clause")}>Group &amp; Count</button>
+                            onClick={() => changeMode("clause")}>Grouping</button>
                   </div>
                   <div className="mode-hint">
                     {mode === "aggregate" && "One value per category — pick what to measure and what to break it down by."}
-                    {mode === "compare" && "Two fields side by side — every combination of X and Y, measured the same way."}
-                    {mode === "clause" && "A grouped summary table. Choose the levels; no X/Y axis needed."}
+                    {mode === "compare" && "Two fields side by side — how many records fall in each combination."}
+                    {mode === "clause" && "A grouped breakdown — pick the levels to group by. No X/Y axis needed."}
                   </div>
                 </>
               )}
@@ -305,7 +322,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
                 </label>
               )}
 
-              {!isTable && !isClause && (
+              {!isTable && !isClause && !isCompare && (
                 <div className="agg-row">
                   <label className="builder-field">
                     {isClause ? "Count / measure" : "Y axis — aggregate"}
@@ -448,8 +465,16 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
       </div>
 
       <div className="editor-preview">
-        <div className="field-label">Live preview</div>
-        <div className="preview-panel">
+        <div className="field-label">
+          Live preview
+          {previewing && <span className="preview-status">updating…</span>}
+          {!previewing && approximate && !isTable && (
+            <span className="preview-status approx" title="Previews of very large datasets are estimated from a random sample so the designer stays responsive. The saved chart always uses the exact numbers.">
+              estimated from a sample
+            </span>
+          )}
+        </div>
+        <div className={`preview-panel${previewing ? " is-loading" : ""}`}>
           {isTable ? (
             preview.length
               ? <RecordsTableView cols={(tableColumns?.length ? tableColumns : defaultRecordCols)

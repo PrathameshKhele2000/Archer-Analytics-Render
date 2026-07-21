@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsArray, IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, ValidateNested } from "class-validator";
+import { IsArray, IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Min, ValidateIf, ValidateNested } from "class-validator";
 
 export class CreateReportDto {
   @IsString()
@@ -136,6 +136,13 @@ export class SaveViewDto {
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  /** Rows to show: omit/null for all matching rows, or N for only the top N. */
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  rowLimit?: number | null;
 
   @IsInt()
   @IsOptional()

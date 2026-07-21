@@ -230,6 +230,23 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
 button.danger, .admin-tab button.danger { color: #b42318; border-color: #f3b9b2; }
 button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color: #b42318; border-color: #e88b80; }
 .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; margin-top: 8px; }
+
+/* ---- Access Control: sub-tabs, per-role resource grants ---- */
+.subtabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--hairline);
+  padding-bottom: 10px; flex-wrap: wrap; }
+.subtabs button { background: transparent; border: 1px solid var(--hairline); }
+.subtabs button:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.subtabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.subtabs button.active:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
+
+.access-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 8px; }
+.fld.inline { flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.access-level { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent);
+  border-radius: 10px; padding: 3px 10px; cursor: help; }
+.access-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.access-chip { font-size: 12px; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--hairline); border-radius: 3px; padding: 3px 8px; }
 .sync-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .sync-actions button, .admin-tab button,
 .datasets-tab .records-table button:not(.tb-btn), .views-tab .records-table button:not(.tb-btn) {
@@ -358,6 +375,16 @@ button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color
 .preview-panel .chart { flex: 1; width: 100%; height: 100%; min-height: 0; }
 .preview-panel .chart-wrap { flex: 1; height: auto; min-height: 0; }
 .preview-panel .chart-number, .preview-panel .chart-table { flex: 1; }
+
+/* While a new preview query runs, fade the old chart so it never reads as the answer. */
+.preview-panel { position: relative; transition: opacity .15s ease; }
+.preview-panel.is-loading { opacity: .35; }
+.preview-panel.is-loading::after {
+  content: ""; position: absolute; inset: 0; cursor: progress;
+}
+.preview-status { margin-left: 8px; font-weight: 400; text-transform: none;
+  letter-spacing: 0; color: var(--accent); }
+.preview-status.approx { color: var(--muted); font-style: italic; cursor: help; }
 
 /* ---- Extra editor controls: legend, limit, drill path, caption ---- */
 .editor-display { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
@@ -506,6 +533,32 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
   padding: 14px 16px; border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
 .report-tools { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .report-head h2 { padding: 0; }
+
+/* ---- DataSets tab: dataset picker cards ---- */
+.ds-picker { display: flex; gap: 12px; flex-wrap: wrap; padding: 16px;
+  border-bottom: 1px solid var(--hairline); }
+.ds-card { display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  min-width: 240px; max-width: 340px; flex: 1 1 240px; padding: 12px 14px; text-align: left;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px;
+  cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.ds-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.ds-card.active { border-color: var(--accent); background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent); }
+.ds-card-name { font-weight: 600; font-size: 14px; color: var(--ink); }
+.ds-card-desc { font-size: 12px; color: var(--muted); line-height: 1.35; }
+.ds-card-stats { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.ds-card-stats strong { color: var(--ink); font-weight: 600; }
+.ds-card-map { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--muted);
+  overflow-wrap: anywhere; }
+.ds-arrow { color: var(--accent); }
+.ds-table-name { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--muted);
+  font-family: var(--font-mono, monospace); }
+
+/* ---- View editor: "Rows to show" (All / top N) ---- */
+.row-limit { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 0 2px; }
+.row-limit .chk { margin: 0; }
+.row-limit-input { width: 110px; }
+.row-limit-input:disabled { background: var(--bg); color: var(--muted); cursor: not-allowed; }
 
 /* Filter toggle button */
 .filter-toggle { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-sans); font-size: 13px;
@@ -715,6 +768,15 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
   .dash-toolbar-right { margin-left: 0; width: 100%; flex-wrap: wrap; }
   .report-head { flex-direction: column; align-items: stretch; padding: 12px; }
   .report-tools { margin-left: 0; flex-wrap: wrap; }
+
+  /* Access Control: grant controls stack instead of squeezing */
+  .access-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .fld.inline { flex-direction: column; align-items: stretch; }
+
+  /* Dataset cards: one per row so the stats stay readable */
+  .ds-picker { padding: 12px; gap: 8px; }
+  .ds-card { min-width: 0; max-width: none; flex: 1 1 100%; }
+  .ds-table-name { display: block; margin-left: 0; margin-top: 2px; }
   .search-box { flex: 1 1 100%; }
   .search-box input { width: 100%; }
   .row-actions { flex-wrap: wrap; }

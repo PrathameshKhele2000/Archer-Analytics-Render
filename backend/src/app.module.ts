@@ -14,6 +14,7 @@ import { DatabaseModule } from "./database/database.module";
 import { DatasetsModule } from "./datasets/datasets.module";
 import { MappingModule } from "./mapping/mapping.module";
 import { ReportsModule } from "./reports/reports.module";
+import { GroupsModule } from "./groups/groups.module";
 import { RolesModule } from "./roles/roles.module";
 import { SyncSourceModule } from "./sync-source/sync-source.module";
 import { UsersModule } from "./users/users.module";
@@ -27,6 +28,7 @@ import { UsersModule } from "./users/users.module";
     AuthModule,
     UsersModule,
     RolesModule,
+    GroupsModule,
     AuditModule,
     DashboardModule,
     ReportsModule,

@@ -9,11 +9,12 @@ const AdminPanel = lazy(() => import("./components/AdminPanel"));
 const ArchitecturePage = lazy(() => import("./components/ArchitecturePage"));
 const DashboardBuilder = lazy(() => import("./components/DashboardBuilder"));
 const DashboardView = lazy(() => import("./components/DashboardView"));
+const DataSetsTab = lazy(() => import("./components/DataSetsTab"));
 const ReportView = lazy(() => import("./components/ReportView"));
 
 const Loading = () => <div className="loading">loading…</div>;
 
-type Section = "dashboard" | "reports" | "admin";
+type Section = "dashboard" | "datasets" | "reports" | "admin";
 
 export default function App() {
   const [user, setUser] = useState<SafeUser | null>(null);
@@ -100,8 +101,13 @@ export default function App() {
             </button>
           )}
           {hasPermission(user, "report:read") && (
+            <button className={section === "datasets" ? "active" : ""} onClick={() => setSection("datasets")}>
+              DataSets
+            </button>
+          )}
+          {hasPermission(user, "report:read") && (
             <button className={section === "reports" ? "active" : ""} onClick={() => setSection("reports")}>
-              Records
+              Views
             </button>
           )}
           {canAdmin && (
@@ -151,6 +157,8 @@ export default function App() {
           </>
         )
       )}
+
+      {section === "datasets" && <DataSetsTab />}
 
       {section === "reports" && (
         <>

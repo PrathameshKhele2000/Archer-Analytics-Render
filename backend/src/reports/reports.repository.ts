@@ -290,35 +290,39 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
 
   async createView(v: {
     key: string; name: string; description?: string | null; datasetKey: string; dataSource: string;
-    baseConditions: any[]; baseLogic?: string | null; sortOrder?: number;
+    baseConditions: any[]; baseLogic?: string | null; rowLimit?: number | null; sortOrder?: number;
   }): Promise<ReportRow> {
     const { rows } = await this.query<ReportRow>(
-      `INSERT INTO reports (key, name, description, data_source, dataset_key, base_conditions, base_logic, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8) RETURNING *`,
+      `INSERT INTO reports (key, name, description, data_source, dataset_key, base_conditions, base_logic, row_limit, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) RETURNING *`,
       [v.key, v.name, v.description ?? null, v.dataSource, v.datasetKey,
-       JSON.stringify(v.baseConditions ?? []), v.baseLogic || null, v.sortOrder ?? 10],
+       JSON.stringify(v.baseConditions ?? []), v.baseLogic || null, v.rowLimit ?? null, v.sortOrder ?? 10],
     );
     return rows[0];
   }
 
   async updateView(id: number, v: {
     name?: string; description?: string | null;
-    baseConditions?: any[]; baseLogic?: string | null; isActive?: boolean; sortOrder?: number;
+    baseConditions?: any[]; baseLogic?: string | null;
+    rowLimit?: number | null; isActive?: boolean; sortOrder?: number;
   }): Promise<ReportRow | null> {
+    // row_limit and base_logic are assigned directly, not COALESCEd: null is a real
+    // value for both ("show all rows" / "AND everything") and must be settable.
     const { rows } = await this.query<ReportRow>(
       `UPDATE reports SET
          name            = COALESCE($2, name),
          description     = COALESCE($3, description),
          base_conditions = COALESCE($4::jsonb, base_conditions),
          base_logic      = $5,
-         is_active       = COALESCE($6, is_active),
-         sort_order      = COALESCE($7, sort_order),
+         row_limit       = $6,
+         is_active       = COALESCE($7, is_active),
+         sort_order      = COALESCE($8, sort_order),
          updated_at      = now()
        WHERE id = $1 RETURNING *`,
       [
         id, v.name ?? null, v.description ?? null,
         v.baseConditions ? JSON.stringify(v.baseConditions) : null,
-        v.baseLogic || null, v.isActive ?? null, v.sortOrder ?? null,
+        v.baseLogic || null, v.rowLimit ?? null, v.isActive ?? null, v.sortOrder ?? null,
       ],
     );
     return rows[0] ?? null;

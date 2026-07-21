@@ -15,6 +15,10 @@ ALTER TABLE reports ADD COLUMN IF NOT EXISTS base_conditions JSONB NOT NULL DEFA
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS base_logic      TEXT;
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS sort_order      INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS dataset_key     TEXT NOT NULL DEFAULT 'archer-findings';
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS row_limit       INTEGER;
+
+COMMENT ON COLUMN reports.row_limit IS
+  'Rows to show: NULL = all matching rows; N = only the top N in the view''s sort order.';
 
 COMMENT ON COLUMN reports.dataset_key IS
   'Which dataset this view reads — its columns, filters and pick-lists come from that dataset''s catalog.';

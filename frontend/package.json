@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:azure": "tsc -b && vite build --mode azure",
     "preview": "vite preview"
   },
   "dependencies": {

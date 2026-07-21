@@ -54,7 +54,20 @@ export class ReportsService implements OnApplicationBootstrap {
   async findings(key: string, user: AuthenticatedUser, q: FindingsQuery) {
     const report = await this.mustBeAccessible(key, user);
     const ctx = await this.contextFor(report);
-    return this.findingsData(key, ctx, { ...q, ...this.scopeOf(report) });
+    return this.findingsData(key, ctx, { ...q, ...this.scopeOf(report) }, report.row_limit);
+  }
+
+  /**
+   * "Rows to show = top N": the view exposes only the first N rows of its sort order,
+   * so we shrink the page window rather than filtering in SQL. A page starting at or
+   * past N asks for LIMIT 0 (valid, returns nothing) and a page straddling N is
+   * truncated to end exactly on it — so paging, the row count and exports all agree
+   * on the same N rows.
+   */
+  private capPage(q: FindingsQuery, rowLimit: number | null | undefined): FindingsQuery {
+    if (!rowLimit || rowLimit <= 0) return q;
+    const offset = (q.page - 1) * q.size;
+    return { ...q, size: Math.max(0, Math.min(q.size, rowLimit - offset)) };
   }
 
   /** A view's preset scope, applied to every query/export of that view. */
@@ -97,8 +110,12 @@ export class ReportsService implements OnApplicationBootstrap {
    * part over big tables, so it's cached with a longer TTL keyed by the filter only —
    * it changes only when data does (on sync). The page is cached briefly.
    */
-  private async findingsData(key: string, ctx: ReportContext, q: FindingsQuery) {
-    const respKey = `report:${key}:data:${JSON.stringify(q)}`;
+  private async findingsData(key: string, ctx: ReportContext, q: FindingsQuery, rowLimit?: number | null) {
+    // Only the SQL page window is capped. The response still reports the size the
+    // caller asked for, because the client derives its page count from total/size —
+    // handing back a shrunken last-page size would inflate that.
+    const pageQuery = this.capPage(q, rowLimit);
+    const respKey = `report:${key}:data:${JSON.stringify(pageQuery)}`;
     const cached = await this.cache.getJson<{ total: number; totalCapped?: boolean; totalEstimated?: boolean; page: number; size: number; rows: any[] }>(respKey);
     if (cached) return cached;
 
@@ -113,9 +130,19 @@ export class ReportsService implements OnApplicationBootstrap {
         await this.cache.setJson(countKey, t, 1800); // 30 min; invalidated on sync
         return t;
       })(),
-      this.repo.pageFindings(ctx, q),
+      pageQuery.size > 0 ? this.repo.pageFindings(ctx, pageQuery) : Promise.resolve([]),
     ]);
-    const result = { total: count.total, totalCapped: count.capped, totalEstimated: count.estimated ?? false, page: q.page, size: q.size, rows };
+    // A "top N" view never has more than N rows, so report N as the total — otherwise
+    // the pager would offer pages the view will never serve.
+    const limited = rowLimit && rowLimit > 0 && count.total > rowLimit;
+    const result = {
+      total: limited ? rowLimit! : count.total,
+      totalCapped: limited ? false : count.capped,
+      totalEstimated: limited ? false : (count.estimated ?? false),
+      page: q.page,
+      size: q.size,
+      rows,
+    };
     await this.cache.setJson(respKey, result, 60);
     return result;
   }
@@ -160,7 +187,7 @@ export class ReportsService implements OnApplicationBootstrap {
       const s = Array.isArray(v) ? v.join("; ") : String(v);
       return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    for await (const batch of this.repo.streamFindings(ctx, filters)) {
+    for await (const batch of this.capStream(this.repo.streamFindings(ctx, filters), report.row_limit)) {
       const lines = batch
         .map((r: any) => columns.map((c) => csvCell(r[c.key])).join(","))
         .join("\r\n");
@@ -174,7 +201,7 @@ export class ReportsService implements OnApplicationBootstrap {
     const [ctx, columns] = await Promise.all([this.contextFor(report), this.exportColumnsFor(report)]);
     await this.exportSvc.streamExcel(
       res, `${key}_export.xlsx`, columns,
-      this.repo.streamFindings(ctx, { ...filters, ...this.scopeOf(report) }),
+      this.capStream(this.repo.streamFindings(ctx, { ...filters, ...this.scopeOf(report) }), report.row_limit),
     );
   }
 
@@ -183,7 +210,7 @@ export class ReportsService implements OnApplicationBootstrap {
     const [ctx, columns] = await Promise.all([this.contextFor(report), this.exportColumnsFor(report)]);
     await this.exportSvc.streamPdf(
       res, `${key}_export.pdf`, report.name, columns,
-      this.repo.streamFindings(ctx, { ...filters, ...this.scopeOf(report) }),
+      this.capStream(this.repo.streamFindings(ctx, { ...filters, ...this.scopeOf(report) }), report.row_limit),
     );
   }
 
@@ -224,6 +251,25 @@ export class ReportsService implements OnApplicationBootstrap {
     return this.repo.listViews();
   }
 
+  /**
+   * Stop a row stream once the view's "top N" is reached, so an export of a limited
+   * view contains exactly the rows the user can see in it — not the whole match set.
+   */
+  private async *capStream(source: AsyncGenerator<any[]>, rowLimit: number | null): AsyncGenerator<any[]> {
+    if (!rowLimit || rowLimit <= 0) {
+      yield* source;
+      return;
+    }
+    let sent = 0;
+    for await (const batch of source) {
+      const room = rowLimit - sent;
+      if (room <= 0) return;
+      yield batch.length > room ? batch.slice(0, room) : batch;
+      sent += Math.min(batch.length, room);
+      if (sent >= rowLimit) return;
+    }
+  }
+
   /** Reject a broken preset filter at save time rather than at every user query. */
   private validateScope(conditions: any[], logic: string | null | undefined, fields: Record<string, FilterField>) {
     buildExpressionWhere(conditions ?? [], logic ?? null, 0, fields); // throws 400 on bad field/operator/logic
@@ -247,6 +293,7 @@ export class ReportsService implements OnApplicationBootstrap {
       dataSource: catalog.table,
       baseConditions: dto.baseConditions ?? [],
       baseLogic: dto.baseLogic,
+      rowLimit: dto.rowLimit ?? null,
       sortOrder: dto.sortOrder,
     });
     await this.applyViewParts(view.id, dto);
@@ -264,6 +311,7 @@ export class ReportsService implements OnApplicationBootstrap {
       description: dto.description,
       baseConditions: dto.baseConditions,
       baseLogic: dto.baseLogic,
+      rowLimit: dto.rowLimit ?? null,
       isActive: dto.isActive,
       sortOrder: dto.sortOrder,
     });

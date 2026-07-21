@@ -159,8 +159,10 @@ export function validateSpec(spec: ChartSpec, catalog: Catalog): void {
 
   if (spec.mode === "clause") {
     // Group & Count: only grouping levels + a measure. No X/Y axis at all.
+    // No levels yet (the user just switched into Grouping) is NOT an error — it simply
+    // means "no breakdown", and we return the overall total. Throwing here made the live
+    // preview 400 the instant the tab was opened.
     const levels = groupByKeys(spec);
-    if (!levels.length) throw new BadRequestException("Group & Count needs at least one Group By level");
     if (levels.length > 4) throw new BadRequestException("At most 4 Group By levels");
     for (const g of levels) {
       if (!catalog.dimensions[g]) throw new BadRequestException(`Unknown Group By dimension '${g}'`);
@@ -234,6 +236,10 @@ function buildAggregationCore(spec: ChartSpec, catalog: Catalog, opts: AggOpts =
   // level becomes its own column (g0, g1, ...) so the UI can render a real table.
   if (spec.mode === "clause" && !opts.dimensionOverride) {
     const levels = groupByKeys(spec);
+    if (!levels.length) {
+      // "Group by nothing" = the overall total, as a single row.
+      return { sql: `SELECT ${measureExpr} AS y ${catalog.baseFrom} ${where}`, params };
+    }
     const exprs = levels.map((k) => catalog.dimensions[k].expr);
     const cols = exprs.map((e, i) => `${e} AS g${i}`);
     cols.push(`${measureExpr} AS y`);

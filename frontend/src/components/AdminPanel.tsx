@@ -3,6 +3,7 @@ import { api, ImportRoleRow, ImportUserRow, Permission, Role, SyncHistoryRow, Sy
 import { SafeUser } from "../auth";
 import { buildCsv, downloadText, splitList } from "../csv";
 import DataSourcesTab from "./DataSourcesTab";
+import AccessControlTab from "./AccessControlTab";
 import ImportPanel from "./ImportPanel";
 import MappingTab from "./MappingTab";
 import Modal from "./Modal";
@@ -240,124 +241,6 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
   );
 }
 
-function RolesTab() {
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [permissions, setPermissions] = useState<Permission[]>([]);
-  const [newRole, setNewRole] = useState({ name: "", description: "" });
-  const [createOpen, setCreateOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
-
-  const createRole = async () => {
-    await api.admin.roles.create(newRole);
-    setNewRole({ name: "", description: "" });
-    setCreateOpen(false);
-    load();
-  };
-
-  const load = () => {
-    api.admin.roles.list().then(setRoles).catch(console.error);
-    api.admin.roles.permissions().then(setPermissions).catch(console.error);
-  };
-  useEffect(load, []);
-
-  const togglePermission = async (role: Role, code: string) => {
-    const has = role.permissions.includes(code);
-    const ids = permissions.filter((p) => (has ? role.permissions.includes(p.code) && p.code !== code : role.permissions.includes(p.code) || p.code === code)).map((p) => p.id);
-    await api.admin.roles.setPermissions(role.id, ids);
-    load();
-  };
-
-  const removeRole = async (role: Role) => {
-    if (!confirm(`Delete role "${role.name}"? Users with this role will simply lose it. This cannot be undone.`)) return;
-    try {
-      await api.admin.roles.remove(role.id);
-      load();
-    } catch (e: any) {
-      alert(e.message ?? "Failed to delete role");
-    }
-  };
-
-  const exportRoles = () => downloadText(
-    "roles-export.csv",
-    buildCsv(["name", "description", "permissions"],
-      roles.map((r) => [r.name, r.description ?? "", r.permissions.join(";")])),
-  );
-
-  return (
-    <div className="admin-tab">
-      <div className="tab-toolbar">
-        <span className="muted small">{roles.length} role{roles.length !== 1 ? "s" : ""}</span>
-        <div className="toolbar-actions">
-          <button className="link-btn" onClick={exportRoles}>⬆ Export CSV</button>
-          <button className="tb-btn" onClick={() => setImportOpen(true)}>⬇ Import</button>
-          <button className="tb-btn primary" onClick={() => setCreateOpen(true)}>+ Create role</button>
-        </div>
-      </div>
-      {roles.map((r) => (
-        <div key={r.id} className="role-card">
-          <div className="role-card-head">
-            <h3>{r.name} {r.is_system && <span className="muted">(system)</span>}</h3>
-            {!r.is_system && <button className="danger" onClick={() => removeRole(r)}>Delete role</button>}
-          </div>
-          <p className="muted">{r.description}</p>
-          <div className="perm-grid">
-            {permissions.map((p) => (
-              <label key={p.code} className="chk">
-                <input type="checkbox" checked={r.permissions.includes(p.code)}
-                       onChange={() => togglePermission(r, p.code)} />
-                {p.code}
-              </label>
-            ))}
-          </div>
-        </div>
-      ))}
-      {createOpen && (
-        <Modal title="Create role" onClose={() => setCreateOpen(false)}>
-          <div className="create-card in-modal">
-            <div className="field-row">
-              <label className="fld">Name
-                <input value={newRole.name} autoFocus onChange={(e) => setNewRole({ ...newRole, name: e.target.value })}
-                       placeholder="e.g. auditor" />
-              </label>
-              <label className="fld">Description
-                <input value={newRole.description} onChange={(e) => setNewRole({ ...newRole, description: e.target.value })}
-                       placeholder="what this role is for" />
-              </label>
-            </div>
-            <div className="form-actions">
-              <button className="primary" disabled={!newRole.name.trim()} onClick={createRole}>Create role</button>
-              <button onClick={() => setCreateOpen(false)}>Cancel</button>
-              <span className="muted small">Set its permissions with the checkboxes after creating.</span>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {importOpen && (
-        <Modal title="Import roles" onClose={() => setImportOpen(false)} wide>
-          <ImportPanel<ImportRoleRow>
-            title="Import roles from CSV"
-            hint="Columns: name, description, permissions. Separate multiple permission codes with ; (e.g. dashboard:read;report:read). Existing role names are updated in place."
-            templateName="roles-template.csv"
-            templateContent={ROLE_TEMPLATE}
-            columns={["Name", "Description", "Permissions"]}
-            parse={(objs) => objs.map((o) => ({
-              name: o.name, description: o.description || undefined, permissions: splitList(o.permissions),
-            }))}
-            toCells={(r) => [r.name, r.description ?? "", (r.permissions ?? []).join(", ")]}
-            onImport={(rows) => api.admin.roles.import(rows)}
-            onDone={load}
-          />
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-const ROLE_TEMPLATE =
-  "name,description,permissions\n" +
-  "auditor,Read-only auditor,dashboard:read;report:read;audit:read\n" +
-  "compliance,Compliance reviewer,dashboard:read;report:read;report:export\n";
 
 function SyncTab() {
   const [status, setStatus] = useState<SyncState[]>([]);
@@ -432,9 +315,9 @@ function AuditTab() {
 
 const TABS = [
   { key: "users", label: "Users", render: (p: TabProps) => <UsersTab currentUserId={p.currentUserId} />, permission: "admin:users:manage" },
-  { key: "roles", label: "Roles", render: () => <RolesTab />, permission: "admin:roles:manage" },
+  { key: "roles", label: "Access Control", render: () => <AccessControlTab />, permission: "admin:roles:manage" },
   { key: "datasets", label: "Data Sources", render: () => <DataSourcesTab />, permission: "admin:datasets:manage" },
-  { key: "views", label: "Record Views", render: () => <ViewsTab />, permission: "admin:reports:manage" },
+  { key: "views", label: "Views", render: () => <ViewsTab />, permission: "admin:reports:manage" },
   { key: "mapping", label: "Findings Field Mapping", render: () => <MappingTab />, permission: "admin:mapping:manage" },
   { key: "sync", label: "Sync", render: () => <SyncTab />, permission: "sync:read" },
   { key: "audit", label: "Audit", render: () => <AuditTab />, permission: "audit:read" },

@@ -16,6 +16,9 @@ interface Draft {
   description: string;
   conditions: FilterCondition[];
   logic: string;
+  /** "all" shows every matching row; "top" shows only the first `rowLimit`. */
+  rowMode: "all" | "top";
+  rowLimit: string; // kept as text so the input can be empty while being typed
   columns: string[];
   roleIds: number[];
 }
@@ -72,7 +75,8 @@ export default function ViewsTab() {
     setErr(null);
     setDraft({
       datasetKey: datasets[0]?.key ?? "archer-findings",
-      name: "", description: "", conditions: [], logic: "", columns: [], roleIds: [],
+      name: "", description: "", conditions: [], logic: "",
+      rowMode: "all", rowLimit: "", columns: [], roleIds: [],
     });
   };
   const openEdit = (v: RecordView) => {
@@ -81,6 +85,8 @@ export default function ViewsTab() {
       id: v.id, datasetKey: v.dataset_key ?? "archer-findings",
       name: v.name, description: v.description ?? "",
       conditions: v.base_conditions ?? [], logic: v.base_logic ?? "",
+      rowMode: v.row_limit ? "top" : "all",
+      rowLimit: v.row_limit ? String(v.row_limit) : "",
       columns: v.columns ?? [], roleIds: v.role_ids ?? [],
     });
   };
@@ -94,6 +100,10 @@ export default function ViewsTab() {
     if (!draft.name.trim()) return setErr("Give the view a name.");
     const cols = draft.columns.length ? draft.columns : defaultCols(schema);
     if (!cols.length) return setErr("Pick at least one column.");
+    const rowLimit = draft.rowMode === "top" ? Number(draft.rowLimit) : null;
+    if (rowLimit !== null && (!Number.isInteger(rowLimit) || rowLimit < 1)) {
+      return setErr("Enter how many rows to show (a whole number, 1 or more).");
+    }
     setBusy(true); setErr(null);
     const byKey = new Map((schema?.recordColumns ?? []).map((c) => [c.key, c.label]));
     const body = {
@@ -102,6 +112,7 @@ export default function ViewsTab() {
       description: draft.description.trim() || undefined,
       baseConditions: draft.conditions,
       baseLogic: draft.logic.trim() || null,
+      rowLimit,
       columns: cols.map((k) => ({ key: k, label: byKey.get(k) ?? k })),
       roleIds: draft.roleIds,
     };
@@ -152,7 +163,7 @@ export default function ViewsTab() {
       <div className="records-table">
         <table className="findings">
           <thead>
-            <tr><th>View</th><th>Dataset</th><th>Scope (preset filter)</th><th>Columns</th><th>Visible to roles</th><th></th></tr>
+            <tr><th>View</th><th>Dataset</th><th>Scope (preset filter)</th><th>Rows</th><th>Columns</th><th>Visible to roles</th><th></th></tr>
           </thead>
           <tbody>
             {views.map((v) => (
@@ -168,6 +179,7 @@ export default function ViewsTab() {
                         {v.base_logic ? <> · logic <code>{v.base_logic}</code></> : null}</>
                     : <em>all records</em>}
                 </td>
+                <td className="muted">{v.row_limit ? `top ${v.row_limit.toLocaleString()}` : "all"}</td>
                 <td className="muted">{v.columns?.length ?? 0}</td>
                 <td className="muted">{roleNames(v.role_ids ?? [])}</td>
                 <td>
@@ -214,6 +226,34 @@ export default function ViewsTab() {
               ? <FilterConditions conditions={draft.conditions} logic={draft.logic} catalog={schema}
                                   onChange={(c, l) => setDraft({ ...draft, conditions: c, logic: l })} />
               : <div className="loading">loading {datasetName(draft.datasetKey)} fields…</div>}
+
+            <div className="field-label">Rows to show</div>
+            <div className="row-limit">
+              <label className="chk">
+                <input type="radio" name="rowMode" checked={draft.rowMode === "all"}
+                       onChange={() => setDraft({ ...draft, rowMode: "all" })} />
+                All matching rows
+              </label>
+              <label className="chk">
+                <input type="radio" name="rowMode" checked={draft.rowMode === "top"}
+                       onChange={() => setDraft({ ...draft, rowMode: "top" })} />
+                Only the top
+              </label>
+              <input className="row-limit-input" type="number" min={1} step={1}
+                     value={draft.rowLimit} placeholder="e.g. 100"
+                     disabled={draft.rowMode !== "top"}
+                     onChange={(e) => setDraft({ ...draft, rowLimit: e.target.value })}
+                     aria-label="Number of rows to show" />
+              <span className="muted small">rows</span>
+            </div>
+            <p className="muted small">
+              “Top” counts down the view’s own sort order, so users see the first N rows and nothing beyond
+              them — in the table and in exports.
+              {draft.rowMode === "top" && matches !== null && Number(draft.rowLimit) > 0 && (
+                <> This view matches <b>{matches.total.toLocaleString()}{matches.capped ? "+" : ""}</b> records
+                  and will show <b>{Math.min(Number(draft.rowLimit), matches.total).toLocaleString()}</b>.</>
+              )}
+            </p>
 
             <div className="field-label">Columns to show</div>
             <MultiCheckDropdown
