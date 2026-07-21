@@ -17,6 +17,20 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
     super(db);
   }
 
+  /**
+   * Whoever can MANAGE every dashboard can see every dashboard. Without this an
+   * administrator would have to grant themselves each new dashboard by hand, and one
+   * created with no grants yet would be invisible. `$n` is the role-name array.
+   */
+  private static adminBypass(rolesParam: string): string {
+    return `EXISTS (
+      SELECT 1 FROM roles ar
+        JOIN role_permissions arp ON arp.role_id = ar.id
+        JOIN permissions ap ON ap.id = arp.permission_id
+       WHERE ar.name = ANY(${rolesParam}::text[]) AND ap.code = 'admin:dashboards:manage'
+    )`;
+  }
+
   /** Dashboards visible to this user: owned by them, granted directly, or via one of their roles. */
   async listAccessible(userId: number, roles: string[]): Promise<DashboardRow[]> {
     const { rows } = await this.query<DashboardRow>(
@@ -27,6 +41,7 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
          d.owner_user_id = $1
          OR da.user_id = $1
          OR r.name = ANY($2::text[])
+         OR ${DashboardRepository.adminBypass("$2")}
        )
        ORDER BY d.sort_order, d.name`,
       [userId, roles],
@@ -43,6 +58,7 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
          d.owner_user_id = $2
          OR da.user_id = $2
          OR r.name = ANY($3::text[])
+         OR ${DashboardRepository.adminBypass("$3")}
        )`,
       [key, userId, roles],
     );

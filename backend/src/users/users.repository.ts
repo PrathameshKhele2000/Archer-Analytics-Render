@@ -111,15 +111,20 @@ export class UsersRepository extends BaseRepository<UserRow> {
     await this.query(`DELETE FROM users WHERE id=$1`, [id]);
   }
 
-  /** How many active users hold the 'admin' role — used to prevent locking everyone out.
-   *  Counts effective admins, so someone who is admin only via a group still counts. */
+  /**
+   * How many active users can still administer the platform — used to prevent
+   * locking everyone out. Defined by the PERMISSION, not a role name: roles are
+   * user-created and renameable, so 'admin' is not a reliable marker. Counts
+   * effective roles, so someone who is an admin only via a group still counts.
+   */
   async countActiveAdmins(): Promise<number> {
     const { rows } = await this.query<{ n: string }>(
       `SELECT count(DISTINCT u.id) AS n
        FROM users u
        JOIN LATERAL (${EFFECTIVE_ROLE_IDS}) er ON TRUE
-       JOIN roles r ON r.id = er.role_id
-       WHERE r.name = 'admin' AND u.is_active`,
+       JOIN role_permissions rp ON rp.role_id = er.role_id
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE p.code = 'admin:users:manage' AND u.is_active`,
     );
     return Number(rows[0]?.n ?? 0);
   }

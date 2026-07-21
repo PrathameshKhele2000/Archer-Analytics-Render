@@ -98,12 +98,33 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
 
   // ---- Access ----
 
+  /**
+   * Whoever can MANAGE every view can obviously see every view. Without this an
+   * administrator would have to grant themselves each new view one at a time, and a
+   * view created with no grants yet would be invisible even to the person who made it.
+   * `$n` is the caller's role-name array.
+   */
+  private static adminBypass(rolesParam: string, permission: string): string {
+    return `EXISTS (
+      SELECT 1 FROM roles ar
+        JOIN role_permissions arp ON arp.role_id = ar.id
+        JOIN permissions ap ON ap.id = arp.permission_id
+       WHERE ar.name = ANY(${rolesParam}::text[]) AND ap.code = '${permission}'
+    )`;
+  }
+
   async listAccessible(userId: number, roles: string[]): Promise<ReportRow[]> {
+    // LEFT JOIN, not JOIN: a view with no grants at all must still be reachable by an
+    // administrator (an inner join would drop it before the bypass could apply).
     const { rows } = await this.query<ReportRow>(
       `SELECT DISTINCT r.* FROM reports r
-       JOIN report_access ra ON ra.report_id = r.id
+       LEFT JOIN report_access ra ON ra.report_id = r.id
        LEFT JOIN roles ro ON ro.id = ra.role_id
-       WHERE r.is_active AND (ra.user_id = $1 OR ro.name = ANY($2::text[]))
+       WHERE r.is_active AND (
+         ra.user_id = $1
+         OR ro.name = ANY($2::text[])
+         OR ${ReportsRepository.adminBypass("$2", "admin:reports:manage")}
+       )
        ORDER BY r.name`,
       [userId, roles],
     );
@@ -113,9 +134,13 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
   async findAccessibleByKey(key: string, userId: number, roles: string[]): Promise<ReportRow | null> {
     const { rows } = await this.query<ReportRow>(
       `SELECT DISTINCT r.* FROM reports r
-       JOIN report_access ra ON ra.report_id = r.id
+       LEFT JOIN report_access ra ON ra.report_id = r.id
        LEFT JOIN roles ro ON ro.id = ra.role_id
-       WHERE r.key = $1 AND r.is_active AND (ra.user_id = $2 OR ro.name = ANY($3::text[]))`,
+       WHERE r.key = $1 AND r.is_active AND (
+         ra.user_id = $2
+         OR ro.name = ANY($3::text[])
+         OR ${ReportsRepository.adminBypass("$3", "admin:reports:manage")}
+       )`,
       [key, userId, roles],
     );
     return rows[0] ?? null;

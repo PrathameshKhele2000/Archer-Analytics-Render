@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, GrantableResources, ImportRoleRow, Permission, Role, UserGroup } from "../api";
+import { api, GrantableResources, ImportRoleRow, Role, UserGroup } from "../api";
 import { SafeUser } from "../auth";
 import { buildCsv, downloadText, splitList } from "../csv";
 import ImportPanel from "./ImportPanel";
@@ -18,19 +18,16 @@ const RESOURCE_LABEL: Record<ResourceKind, string> = { views: "Views", dashboard
 // ---------------------------------------------------------------- Roles
 
 /**
- * One role: its read access to specific views/dashboards, plus (folded away) the
- * system permission codes that decide which parts of the app it can reach at all.
+ * One role and the views/dashboards it can read. Permission codes are no longer
+ * exposed: a new role starts read-only, and the only decision left is *what* it may
+ * read. The built-in System Admin role renders as a locked, non-editable card.
  */
-function RoleCard({
-  role, permissions, resources, onChanged,
-}: {
+function RoleCard({ role, resources, onChanged }: {
   role: Role;
-  permissions: Permission[];
   resources: GrantableResources;
   onChanged: () => void;
 }) {
   const [kind, setKind] = useState<ResourceKind>("views");
-  const [showPerms, setShowPerms] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -51,19 +48,6 @@ function RoleCard({
     } finally { setBusy(false); }
   };
 
-  const togglePermission = async (code: string) => {
-    const has = role.permissions.includes(code);
-    const next = has ? role.permissions.filter((c) => c !== code) : [...role.permissions, code];
-    const ids = permissions.filter((p) => next.includes(p.code)).map((p) => p.id);
-    setBusy(true); setErr(null);
-    try {
-      await api.admin.roles.setPermissions(role.id, ids);
-      onChanged();
-    } catch (e: any) {
-      setErr(e.message ?? "Could not save permissions");
-    } finally { setBusy(false); }
-  };
-
   const remove = async () => {
     if (!confirm(`Delete role "${role.name}"? Users and groups holding it simply lose it. This cannot be undone.`)) return;
     try { await api.admin.roles.remove(role.id); onChanged(); }
@@ -77,11 +61,29 @@ function RoleCard({
     ...named("dashboards", role.dashboard_ids).map((n) => `Dashboard: ${n}`),
   ];
 
+  // The built-in role already reaches everything, permanently. There is nothing to
+  // configure on it, and narrowing it would be a lockout — so show it, locked.
+  if (role.is_system) {
+    return (
+      <div className="role-card system">
+        <div className="role-card-head">
+          <h3>{role.name} <span className="access-level locked">🔒 Built-in</span></h3>
+        </div>
+        {role.description && <p className="muted">{role.description}</p>}
+        <p className="muted small">
+          Full access to every view, dashboard and admin screen. This role is permanent —
+          it cannot be edited, deactivated or deleted. Grant it by adding people to a group
+          that holds it.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="role-card">
       <div className="role-card-head">
-        <h3>{role.name} {role.is_system && <span className="muted">(system)</span>}</h3>
-        {!role.is_system && <button className="danger" onClick={remove}>Delete role</button>}
+        <h3>{role.name}</h3>
+        <button className="danger" onClick={remove}>Delete role</button>
       </div>
       {role.description && <p className="muted">{role.description}</p>}
 
@@ -112,35 +114,14 @@ function RoleCard({
       )}
 
       {err && <div className="login-error">{err}</div>}
-
-      <button className="link-btn" onClick={() => setShowPerms((s) => !s)}>
-        {showPerms ? "▴ Hide" : "▾ Show"} system permissions ({role.permissions.length})
-      </button>
-      {showPerms && (
-        <>
-          <p className="muted small">
-            These decide which parts of the app the role can open at all (e.g. <code>report:read</code> to use the
-            Views tab). Access above decides <em>which</em> views and dashboards it then sees.
-          </p>
-          <div className="perm-grid">
-            {permissions.map((p) => (
-              <label key={p.code} className="chk">
-                <input type="checkbox" checked={role.permissions.includes(p.code)}
-                       onChange={() => togglePermission(p.code)} />
-                {p.code}
-              </label>
-            ))}
-          </div>
-        </>
-      )}
     </div>
   );
 }
 
 function RolesPanel({
-  roles, permissions, resources, reload,
+  roles, resources, reload,
 }: {
-  roles: Role[]; permissions: Permission[]; resources: GrantableResources; reload: () => void;
+  roles: Role[]; resources: GrantableResources; reload: () => void;
 }) {
   const [newRole, setNewRole] = useState({ name: "", description: "" });
   const [createOpen, setCreateOpen] = useState(false);
@@ -170,12 +151,12 @@ function RolesPanel({
         </div>
       </div>
       <p className="muted small">
-        A role grants <b>read access</b> to the views and dashboards you pick. Assign it to users directly,
-        or to a group so everyone in that group inherits it.
+        A role grants <b>read access</b> to the views and dashboards you pick. Roles reach people through
+        <b> groups</b> — create a group, give it roles, and add users to it.
       </p>
 
       {roles.map((r) => (
-        <RoleCard key={r.id} role={r} permissions={permissions} resources={resources} onChanged={reload} />
+        <RoleCard key={r.id} role={r} resources={resources} onChanged={reload} />
       ))}
 
       {createOpen && (
@@ -384,12 +365,10 @@ function GroupsPanel({ roles, reload: reloadRoles }: { roles: Role[]; reload: ()
 export default function AccessControlTab() {
   const [pane, setPane] = useState<"roles" | "groups">("roles");
   const [roles, setRoles] = useState<Role[]>([]);
-  const [permissions, setPermissions] = useState<Permission[]>([]);
   const [resources, setResources] = useState<GrantableResources>({ views: [], dashboards: [] });
 
   const load = () => {
     api.admin.roles.list().then(setRoles).catch(console.error);
-    api.admin.roles.permissions().then(setPermissions).catch(console.error);
     api.admin.roles.resources().then(setResources).catch(console.error);
   };
   useEffect(load, []);
@@ -402,7 +381,7 @@ export default function AccessControlTab() {
       </div>
 
       {pane === "roles"
-        ? <RolesPanel roles={roles} permissions={permissions} resources={resources} reload={load} />
+        ? <RolesPanel roles={roles} resources={resources} reload={load} />
         : <GroupsPanel roles={roles} reload={load} />}
     </div>
   );

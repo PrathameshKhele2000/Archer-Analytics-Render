@@ -124,6 +124,14 @@ export class RolesRepository extends BaseRepository<RoleRow> {
     await this.query(`DELETE FROM roles WHERE id=$1`, [id]);
   }
 
+  /** Permission ids for a fixed set of codes (unknown codes are simply absent). */
+  async permissionIdsForCodes(codes: string[]): Promise<number[]> {
+    const { rows } = await this.query<{ id: number }>(
+      `SELECT id FROM permissions WHERE code = ANY($1::text[])`, [codes],
+    );
+    return rows.map((r) => r.id);
+  }
+
   /** Case-insensitive lookup of permission code -> id, for bulk role imports. */
   async permissionIdsByCode(): Promise<Map<string, number>> {
     const { rows } = await this.query<{ id: number; code: string }>(`SELECT id, code FROM permissions`);

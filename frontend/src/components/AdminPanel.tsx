@@ -23,35 +23,26 @@ const USER_TEMPLATE =
 
 function UsersTab({ currentUserId }: { currentUserId: number }) {
   const [users, setUsers] = useState<SafeUser[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [form, setForm] = useState({ email: "", password: "", fullName: "", roleIds: [] as number[] });
+  const [form, setForm] = useState({ email: "", password: "", fullName: "" });
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   // Edit user
   const [editUser, setEditUser] = useState<SafeUser | null>(null);
-  const [editForm, setEditForm] = useState({ email: "", fullName: "", password: "", roleIds: [] as number[] });
+  const [editForm, setEditForm] = useState({ email: "", fullName: "", password: "" });
   const [editErr, setEditErr] = useState<string | null>(null);
 
   const load = () => {
     api.admin.users.list().then(setUsers).catch(console.error);
-    api.admin.roles.list().then(setRoles).catch(console.error);
   };
   useEffect(load, []);
 
-  const toggleRole = (id: number) =>
-    setForm((f) => ({ ...f, roleIds: f.roleIds.includes(id) ? f.roleIds.filter((r) => r !== id) : [...f.roleIds, id] }));
-
   const openEdit = (u: SafeUser) => {
     setEditErr(null);
-    // Map the user's role names back to ids for the checkboxes.
-    const roleIds = roles.filter((r) => u.roles.includes(r.name)).map((r) => r.id);
-    setEditForm({ email: u.email, fullName: u.full_name, password: "", roleIds });
+    setEditForm({ email: u.email, fullName: u.full_name, password: "" });
     setEditUser(u);
   };
-  const toggleEditRole = (id: number) =>
-    setEditForm((f) => ({ ...f, roleIds: f.roleIds.includes(id) ? f.roleIds.filter((r) => r !== id) : [...f.roleIds, id] }));
 
   const saveEdit = async () => {
     if (!editUser) return;
@@ -62,7 +53,6 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
       await api.admin.users.update(editUser.id, {
         email: editForm.email.trim(),
         fullName: editForm.fullName.trim(),
-        roleIds: editForm.roleIds,
         ...(editForm.password ? { password: editForm.password } : {}),
       });
       setEditUser(null);
@@ -90,7 +80,7 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
     }
     try {
       await api.admin.users.create(form);
-      setForm({ email: "", password: "", fullName: "", roleIds: [] });
+      setForm({ email: "", password: "", fullName: "" });
       setCreateOpen(false);
       load();
     } catch (e: any) {
@@ -120,7 +110,7 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
         </div>
       </div>
       <table className="findings">
-        <thead><tr><th>Email</th><th>Name</th><th>Roles</th><th>Active</th><th>Last login</th><th /></tr></thead>
+        <thead><tr><th>Email</th><th>Name</th><th>Roles (from groups)</th><th>Active</th><th>Last login</th><th /></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
@@ -164,16 +154,10 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
                 </div>
               </label>
             </div>
-            <div className="fld">Roles
-              <div className="role-checks">
-                {roles.map((r) => (
-                  <label key={r.id} className="chk">
-                    <input type="checkbox" checked={form.roleIds.includes(r.id)} onChange={() => toggleRole(r.id)} />
-                    {r.name}
-                  </label>
-                ))}
-              </div>
-            </div>
+            <p className="muted small">
+              Access is granted through groups, not here — create the user, then add them to a group in
+              Access Control → Groups.
+            </p>
             <div className="form-actions">
               <button className="primary" onClick={create}>Create user</button>
               <button onClick={() => setCreateOpen(false)}>Cancel</button>
@@ -201,13 +185,9 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
               </label>
             </div>
             <div className="fld">Roles
-              <div className="role-checks">
-                {roles.map((r) => (
-                  <label key={r.id} className="chk">
-                    <input type="checkbox" checked={editForm.roleIds.includes(r.id)} onChange={() => toggleEditRole(r.id)} />
-                    {r.name}
-                  </label>
-                ))}
+              <div className="muted small">
+                {editUser.roles.length ? editUser.roles.join(", ") : "none"} — inherited from this user's groups.
+                Change them in Access Control → Groups.
               </div>
             </div>
             <div className="form-actions">

@@ -61,6 +61,35 @@ export class SchemaBootstrapService implements OnApplicationBootstrap {
       name: "ix_group_member_user",
       sql: `CREATE INDEX IF NOT EXISTS ix_group_member_user ON user_group_member (user_id)`,
     },
+    // The one permanent role, and the group that carries it. Re-asserted on every
+    // boot so it can't be left missing (which would mean nobody can administer the
+    // platform). Only ever adds — an admin's own roles and groups are untouched.
+    {
+      name: "System Admin role",
+      sql: `INSERT INTO roles (name, description, is_system)
+            VALUES ('System Admin', 'Full platform administrator. Built-in and permanent.', TRUE)
+            ON CONFLICT (name) DO UPDATE SET is_system = TRUE`,
+    },
+    {
+      name: "System Admin permissions",
+      sql: `INSERT INTO role_permissions (role_id, permission_id)
+            SELECT r.id, p.id FROM roles r CROSS JOIN permissions p
+             WHERE r.name = 'System Admin'
+            ON CONFLICT DO NOTHING`,
+    },
+    {
+      name: "System Administrators group",
+      sql: `INSERT INTO user_group (name, description)
+            VALUES ('System Administrators', 'Members hold the System Admin role.')
+            ON CONFLICT (name) DO NOTHING`,
+    },
+    {
+      name: "System Administrators group role",
+      sql: `INSERT INTO user_group_role (group_id, role_id)
+            SELECT g.id, r.id FROM user_group g CROSS JOIN roles r
+             WHERE g.name = 'System Administrators' AND r.name = 'System Admin'
+            ON CONFLICT DO NOTHING`,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {

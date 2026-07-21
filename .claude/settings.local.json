@@ -215,7 +215,12 @@
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT column_name FROM information_schema.columns WHERE table_name='reports' AND column_name='row_limit'\")",
       "Bash(curl -s -o /tmp/li.json -w 'http=%{http_code}\\\\n' -X POST localhost:3000/api/auth/login -H 'content-type: application/json' -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
       "Bash(python3 -c 'import json;print\\(json.load\\(open\\(\"/tmp/li.json\"\\)\\)[\"accessToken\"]\\)')",
-      "Bash(curl -s localhost:8000/api/auth/me -H 'authorization: Bearer __TRACKED_VAR__')"
+      "Bash(curl -s localhost:8000/api/auth/me -H 'authorization: Bearer __TRACKED_VAR__')",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT name, is_system FROM roles ORDER BY name\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -f db/system_admin_role.sql)",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT g.name AS grp, r.name AS role, u.email FROM user_group g LEFT JOIN user_group_role gr ON gr.group_id=g.id LEFT JOIN roles r ON r.id=gr.role_id LEFT JOIN user_group_member gm ON gm.group_id=g.id LEFT JOIN users u ON u.id=gm.user_id\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT count\\(*\\) FROM role_permissions rp JOIN roles r ON r.id=rp.role_id WHERE r.name='System Admin'\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT \\(SELECT count\\(*\\) FROM report_access\\) AS report_access, \\(SELECT count\\(*\\) FROM dashboard_access\\) AS dashboard_access\")"
     ]
   }
 }

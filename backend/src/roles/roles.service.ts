@@ -4,9 +4,27 @@ import { CreateRoleDto } from "./dto/create-role.dto";
 import { ImportRoleDto } from "./dto/import-roles.dto";
 import { ImportSummary } from "../users/users.service";
 
+/** The one built-in role: every permission, and not editable or removable. */
+export const SYSTEM_ADMIN_ROLE = "System Admin";
+
+/**
+ * What a newly created role can do. Permission codes gate which SCREENS a role can
+ * open; the views/dashboards it may actually see are chosen per role in Access
+ * Control. Without this baseline a new role would be granted views it then couldn't
+ * open, which reads as "access control is broken".
+ */
+const NEW_ROLE_PERMISSIONS = ["dashboard:read", "report:read", "report:export"];
+
 @Injectable()
 export class RolesService {
   constructor(private readonly repo: RolesRepository) {}
+
+  /** System roles are fixed: their permissions and grants are not editable. */
+  private assertEditable(role: { is_system: boolean; name: string }) {
+    if (role.is_system) {
+      throw new BadRequestException(`'${role.name}' is a built-in role and cannot be changed.`);
+    }
+  }
 
   list() {
     return this.repo.listWithPermissions();
@@ -23,7 +41,8 @@ export class RolesService {
 
   /** Replace the views/dashboards this role can read (read access only). */
   async setResources(roleId: number, viewIds?: number[], dashboardIds?: number[]) {
-    await this.mustFind(roleId);
+    // System Admin already reaches everything; narrowing it would be a lockout.
+    this.assertEditable(await this.mustFind(roleId));
     await this.repo.setResourceGrants(roleId, viewIds, dashboardIds);
     return this.mustFind(roleId);
   }
@@ -33,22 +52,31 @@ export class RolesService {
     if (existing.some((r) => r.name === dto.name)) {
       throw new ConflictException("A role with this name already exists");
     }
+    if (dto.name.trim().toLowerCase() === SYSTEM_ADMIN_ROLE.toLowerCase()) {
+      throw new ConflictException(`'${SYSTEM_ADMIN_ROLE}' is reserved.`);
+    }
     const role = await this.repo.create(dto.name, dto.description);
-    if (dto.permissionIds?.length) await this.repo.setPermissions(role.id, dto.permissionIds);
+    // Permissions are no longer picked by hand when creating a role — every new role
+    // starts read-only, and what it can read is chosen in Access Control. An explicit
+    // permissionIds (used by CSV import) still wins.
+    const permissionIds = dto.permissionIds?.length
+      ? dto.permissionIds
+      : await this.repo.permissionIdsForCodes(NEW_ROLE_PERMISSIONS);
+    await this.repo.setPermissions(role.id, permissionIds);
     return this.mustFind(role.id);
   }
 
   async setPermissions(roleId: number, permissionIds: number[]) {
-    await this.mustFind(roleId);
+    this.assertEditable(await this.mustFind(roleId));
     await this.repo.setPermissions(roleId, permissionIds);
     return this.mustFind(roleId);
   }
 
-  /** Delete a custom role. The three built-in (system) roles cannot be deleted. */
+  /** Delete a custom role. The built-in System Admin role cannot be deleted. */
   async remove(id: number) {
     const role = await this.repo.findById(id);
     if (!role) throw new NotFoundException("Role not found");
-    if (role.is_system) throw new BadRequestException("Built-in roles cannot be deleted.");
+    if (role.is_system) throw new BadRequestException(`'${role.name}' is a built-in role and cannot be deleted.`);
     await this.repo.delete(id); // user_roles rows cascade — affected users simply lose this role
     return { ok: true };
   }

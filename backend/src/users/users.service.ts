@@ -74,7 +74,10 @@ export class UsersService {
   async remove(id: number, currentUserId: number) {
     const user = await this.mustFind(id);
     if (id === currentUserId) throw new BadRequestException("You cannot delete your own account.");
-    if (user.roles.includes("admin") && user.is_active && (await this.repo.countActiveAdmins()) <= 1) {
+    // Identify an admin by the permission they effectively hold, not by a role name —
+    // roles are user-created now, and admin access arrives through a group.
+    const isAdmin = user.permissions?.includes("admin:users:manage");
+    if (isAdmin && user.is_active && (await this.repo.countActiveAdmins()) <= 1) {
       throw new BadRequestException("Cannot delete the last active administrator.");
     }
     await this.repo.delete(id);
