@@ -8,6 +8,7 @@ import {
   QUERY_BUILDER_SOURCE,
   WIDGET_DATA_SOURCES,
 } from "./dashboard.entity";
+import { BREAKDOWN_MATVIEW_CAP } from "./query-builder";
 
 @Injectable()
 export class DashboardRepository extends BaseRepository<DashboardRow> {
@@ -116,14 +117,29 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
 
   // ---- Per-chart materialized views (widgetId is a DB integer -> safe to interpolate) ----
 
+  /**
+   * Build a chart's matview and swap it in atomically.
+   *
+   * Populating takes seconds to minutes on a large table, so it happens under a scratch
+   * name first; only the rename is visible to readers, and it runs in one transaction.
+   * Dropping the live view up front (the obvious way) would leave every reader without a
+   * matview for the whole build, pushing them onto slow source-table queries — which on a
+   * busy dashboard is exactly when that hurts most.
+   */
   async createChartMatview(widgetId: number, selectSql: string): Promise<void> {
     const mv = `mv_chart_${widgetId}`;
-    await this.query(`DROP MATERIALIZED VIEW IF EXISTS ${mv}`);
-    await this.query(`CREATE MATERIALIZED VIEW ${mv} AS ${selectSql}`);
+    const tmp = `${mv}_build`;
+    await this.query(`DROP MATERIALIZED VIEW IF EXISTS ${tmp}`);
+    await this.query(`CREATE MATERIALIZED VIEW ${tmp} AS ${selectSql}`);
+    await this.transaction(async (client) => {
+      await client.query(`DROP MATERIALIZED VIEW IF EXISTS ${mv}`);
+      await client.query(`ALTER MATERIALIZED VIEW ${tmp} RENAME TO ${mv}`);
+    });
   }
 
   async dropChartMatview(widgetId: number): Promise<void> {
     await this.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}`);
+    await this.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}_build`);
   }
 
   async readChartMatview(widgetId: number): Promise<any[]> {
@@ -140,6 +156,27 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
    * integers and reaggExpr is a whitelisted expression over fixed matview columns (safe
    * to interpolate); step values are parameterized.
    */
+  /**
+   * Did this chart have more level-combinations than the breakdown can hold? Reading an
+   * incomplete breakdown would silently under-count, so callers must query the source
+   * instead. Throws if the matview doesn't exist yet (caller rebuilds).
+   *
+   * Treats "exactly CAP rows" as truncated, not just CAP + 1. The build asks for CAP + 1
+   * so a full breakdown is distinguishable, but matviews written before that used a plain
+   * LIMIT CAP and look identical to complete ones at CAP. Erring this way costs a little
+   * speed on the one chart that lands on exactly CAP combinations; erring the other way
+   * would serve wrong numbers, and old matviews would stay wrong until rebuilt.
+   *
+   * A truncated matview is left in place on purpose: it is the cheap, persistent record of
+   * "this chart can't be pre-aggregated", so a doomed build isn't re-run on every load.
+   */
+  async breakdownTruncated(widgetId: number): Promise<boolean> {
+    const { rows } = await this.query(
+      `SELECT 1 FROM mv_chart_${widgetId} OFFSET ${BREAKDOWN_MATVIEW_CAP - 1} LIMIT 1`,
+    );
+    return rows.length > 0;
+  }
+
   async aggregateChartMatview(
     widgetId: number, level: number, stepValues: string[], limit: number, reaggExpr: string,
     /** Keep the split-by series (base level of a split chart); drill levels drop it. */

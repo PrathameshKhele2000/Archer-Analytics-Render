@@ -474,7 +474,10 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
                                 onClick={() => setGroupBy((g) => g.filter((_, idx) => idx !== i))}>✕</button>
                       </div>
                     ))}
-                    {groupBy.length < 4 && groupByOptions(groupBy.length).length > 0 && (
+                    {/* Grouping drills through these levels, so it gets the same depth as
+                        the Drill-down path (6). A split-by only colours one chart, where
+                        more than a few dimensions stop being readable. */}
+                    {groupBy.length < (isClause ? 6 : 4) && groupByOptions(groupBy.length).length > 0 && (
                       <button type="button" className="lvl-add"
                               onClick={() => setGroupBy((g) => [...g, groupByOptions(g.length)[0].key])}>
                         + Add Group By level

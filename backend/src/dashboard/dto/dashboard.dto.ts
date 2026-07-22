@@ -166,8 +166,11 @@ export class ChartSpecDto {
   @IsOptional()
   series?: string | null; // legacy single Group By
 
+  // Six levels matches the drill-down path's depth (base + 5). Beyond that a breakdown
+  // has more combinations than it can usefully pre-aggregate (see BREAKDOWN_MATVIEW_CAP).
   @IsArray()
   @IsString({ each: true })
+  @ArrayMaxSize(6)
   @IsOptional()
   groupBy?: string[] | null; // multilevel Group By (aggregate mode)
 

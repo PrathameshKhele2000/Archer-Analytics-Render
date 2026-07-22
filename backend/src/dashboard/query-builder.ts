@@ -47,6 +47,10 @@ export function recordChartColumns(spec: ChartSpec, catalog: Catalog): RecordFie
 
 
 const MAX_DRILL_LEVELS = 5;
+/** Grouping drills through its levels, so it gets the same depth as base + drill-down. */
+const MAX_GROUP_LEVELS = 6;
+/** A split-by only colours one chart; past a few dimensions the series stop being readable. */
+const MAX_SERIES_LEVELS = 4;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 1000;
 
@@ -225,7 +229,9 @@ export function validateSpec(spec: ChartSpec, catalog: Catalog): void {
     // means "no breakdown", and we return the overall total. Throwing here made the live
     // preview 400 the instant the tab was opened.
     const levels = groupByKeys(spec);
-    if (levels.length > 4) throw new BadRequestException("At most 4 Group By levels");
+    if (levels.length > MAX_GROUP_LEVELS) {
+      throw new BadRequestException(`At most ${MAX_GROUP_LEVELS} Group By levels`);
+    }
     for (const g of levels) {
       if (!catalog.dimensions[g]) throw new BadRequestException(`Unknown Group By dimension '${g}'`);
     }
@@ -254,7 +260,9 @@ export function validateSpec(spec: ChartSpec, catalog: Catalog): void {
     const groupKeys = groupByKeys(spec);
     if (groupKeys.length) {
       if (!chart.supportsSeries) throw new BadRequestException(`Chart type '${spec.chartType}' does not support Group By`);
-      if (groupKeys.length > 4) throw new BadRequestException("At most 4 Group By levels");
+      if (groupKeys.length > MAX_SERIES_LEVELS) {
+        throw new BadRequestException(`At most ${MAX_SERIES_LEVELS} Group By levels`);
+      }
       for (const g of groupKeys) {
         if (!catalog.dimensions[g]) throw new BadRequestException(`Unknown Group By dimension '${g}'`);
       }
@@ -395,7 +403,17 @@ export function buildAggregationInline(spec: ChartSpec, catalog: Catalog): strin
 }
 
 /** Safety cap on distinct group combinations a clause matview stores. */
-const CLAUSE_MATVIEW_CAP = 200_000;
+/**
+ * Ceiling on rows in a breakdown matview. It holds one row per COMBINATION of the
+ * chart's levels, so the count is the product of their cardinalities — four levels
+ * ending in a 900k-value field is ~10M combinations, which is no longer a summary.
+ *
+ * The build deliberately fetches CAP + 1 rows: overshooting by one is how a reader
+ * tells "this is the whole breakdown" from "this was cut off", and a cut-off
+ * breakdown must never be served (it would silently under-count). See
+ * DashboardRepository.breakdownTruncated.
+ */
+export const BREAKDOWN_MATVIEW_CAP = 200_000;
 
 /** The roll-ups Grouping offers over sub-group record counts. */
 const GROUP_AGGS = new Set(["count", "sum", "avg", "min", "max"]);
@@ -498,7 +516,7 @@ export function buildBreakdownMatviewInline(
     ${catalog.baseFrom}
     ${where}
     GROUP BY ${groupCols.join(", ")}
-    LIMIT ${CLAUSE_MATVIEW_CAP}
+    LIMIT ${BREAKDOWN_MATVIEW_CAP + 1}
   `;
   return sql.replace(/\$(\d+)/g, (_m, n) => inlineLiteral(params[Number(n) - 1]));
 }

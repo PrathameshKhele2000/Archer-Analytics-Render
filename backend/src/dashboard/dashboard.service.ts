@@ -124,6 +124,42 @@ export class DashboardService {
     return { levels: drillSequence(spec), parts, seriesKeys };
   }
 
+  /**
+   * Matview builds currently running, keyed by widget. Every read that finds no matview
+   * would otherwise kick off its own build, so opening a dashboard a few times while one
+   * is running used to start several — each rebuilding the same view, competing for the
+   * connection pool, and starving the very queries waiting on them. Callers join the
+   * running build instead of starting another.
+   */
+  private readonly building = new Map<number, Promise<void>>();
+
+  /** Start this chart's matview build, or hand back the one already running. */
+  private buildMatview(widgetId: number, spec: ChartSpec): Promise<void> {
+    const running = this.building.get(widgetId);
+    if (running) return running;
+    const build = this.syncChartMatview(widgetId, spec)
+      .finally(() => this.building.delete(widgetId));
+    this.building.set(widgetId, build);
+    return build;
+  }
+
+  /**
+   * Wait for this chart's matview, but never longer than `ms` — a caller that waits
+   * forever would hold a request open for the whole build. On timeout the caller falls
+   * back to querying the source; the build carries on and the next read gets it.
+   */
+  private async awaitMatview(widgetId: number, spec: ChartSpec, ms = 20_000): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        this.buildMatview(widgetId, spec),
+        new Promise((resolve) => { timer = setTimeout(resolve, ms); }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   /** (Re)build a chart's materialized view; best-effort — charts still work live if this fails. */
   private async syncChartMatview(widgetId: number, spec: ChartSpec): Promise<void> {
     if (spec.chartType === "table") return; // records list: no aggregation, no matview
@@ -164,16 +200,24 @@ export class DashboardService {
         // A drilling chart shows the FIRST level, re-aggregated from the breakdown matview
         // (the measure recombined from its stored components); everything else reads its
         // stored result set directly.
-        return breakdown
-          ? await this.repo.aggregateChartMatview(
-              widget.id, 0, [], resolveChartLimit(spec.limit), breakdown.parts.reaggExpr,
-              breakdown.seriesKeys.length > 0)
-          : await this.repo.readChartMatview(widget.id);
+        if (breakdown) {
+          if (await this.repo.breakdownTruncated(widget.id)) {
+            // Too many level-combinations to pre-aggregate. Answer from the source —
+            // slower, but a truncated breakdown would silently under-count.
+            this.log.warn(`chart ${widget.id} breakdown too large to pre-aggregate; querying live`);
+            const { sql, params } = buildAggregation(spec, catalog);
+            return await this.repo.runAggregation(sql, params);
+          }
+          return await this.repo.aggregateChartMatview(
+            widget.id, 0, [], resolveChartLimit(spec.limit), breakdown.parts.reaggExpr,
+            breakdown.seriesKeys.length > 0);
+        }
+        return await this.repo.readChartMatview(widget.id);
       } catch {
         // No matview yet (new chart, or its build is still running). Serve the answer
         // LIVE right now and build the matview in the background — building it here
         // would stall the whole dashboard for minutes on a large table.
-        void this.syncChartMatview(widget.id, spec);
+        void this.buildMatview(widget.id, spec);
         const { sql, params } = buildAggregation(spec, catalog);
         return await this.repo.runAggregation(sql, params);
       }
@@ -396,7 +440,7 @@ export class DashboardService {
     // the gateway kills it (Azure App Service cuts off at 230s), so saving a chart
     // appears to fail. The chart works immediately either way: until the matview
     // exists, chartData() falls back to a live aggregation.
-    void this.syncChartMatview(widget.id, resolved);
+    void this.buildMatview(widget.id, resolved);
     await this.invalidate(key);
     return widget;
   }
@@ -412,7 +456,7 @@ export class DashboardService {
       config: dto.spec as unknown as Record<string, unknown> | undefined,
       sort_order: dto.sortOrder,
     });
-    if (resolved) void this.syncChartMatview(widgetId, resolved); // spec changed -> rebuild in background
+    if (resolved) void this.buildMatview(widgetId, resolved); // spec changed -> rebuild in background
     await this.invalidate(key);
     return this.repo.listWidgets((await this.repo.findByKey(key))!.id, false);
   }
@@ -454,12 +498,32 @@ export class DashboardService {
       const level = steps.length;
       const levelDim = sequence[level] ?? null;
       if (!levelDim) return { rows: [], dimension: null, atLeaf: true };
-      try {
+
+      /** Read this level from the breakdown; null = incomplete, so it must not be used. */
+      const fromMatview = async () => {
+        // An incomplete breakdown would under-count every level, so fall through to the
+        // live query (slower, correct) rather than serve it.
+        if (await this.repo.breakdownTruncated(widgetId)) return null;
         const rows = await this.repo.aggregateChartMatview(widgetId, level, steps.map((s) => s.value), resolveChartLimit(spec.limit), breakdown.parts.reaggExpr);
         return { rows, dimension: levelDim, atLeaf: level + 1 >= sequence.length };
-      } catch (e: any) {
-        // Matview not built yet — fall through to the live query below.
-        this.log.warn(`drill matview miss for ${widgetId}, live fallback: ${e?.message ?? e}`);
+      };
+
+      try {
+        const hit = await fromMatview();
+        if (hit) return hit;
+      } catch {
+        // No matview yet — the chart was only just saved, so its build is still running.
+        // Waiting for that build is far cheaper than drilling the source table (which
+        // costs seconds at the first level and tens of seconds deeper in), and it leaves
+        // the chart fast from here on instead of paying that price on every click.
+        try {
+          await this.awaitMatview(widgetId, spec);
+          const hit = await fromMatview();
+          if (hit) return hit;
+        } catch (e: any) {
+          // Build failed or is still running past the wait — answer live below.
+          this.log.warn(`drill matview miss for ${widgetId}, live fallback: ${e?.message ?? e}`);
+        }
       }
     }
 
