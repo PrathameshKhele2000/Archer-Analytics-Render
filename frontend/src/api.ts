@@ -465,6 +465,8 @@ export const api = {
       permissions: () => get<Permission[]>("/api/admin/roles/permissions"),
       create: (body: { name: string; description?: string; permissionIds?: number[] }) =>
         post<Role>("/api/admin/roles", body),
+      update: (id: number, body: { name?: string; description?: string }) =>
+        request<Role>(`/api/admin/roles/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
       setPermissions: (id: number, permissionIds: number[]) =>
         request<Role>(`/api/admin/roles/${id}/permissions`, {
           method: "PUT",

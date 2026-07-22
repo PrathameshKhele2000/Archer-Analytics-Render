@@ -2,119 +2,91 @@ import { useEffect, useState } from "react";
 import { api, GrantableResources, ImportRoleRow, Role, UserGroup } from "../api";
 import { SafeUser } from "../auth";
 import { buildCsv, downloadText, splitList } from "../csv";
+import CheckList, { CheckOption } from "./CheckList";
 import ImportPanel from "./ImportPanel";
 import Modal from "./Modal";
-import MultiCheckDropdown from "./MultiCheckDropdown";
 
 const ROLE_TEMPLATE =
   "name,description,permissions\n" +
   "auditor,Read-only auditor,dashboard:read;report:read;audit:read\n" +
   "compliance,Compliance reviewer,dashboard:read;report:read;report:export\n";
 
-/** What a role can be granted access to. Read-only for now — the only level we issue. */
-type ResourceKind = "views" | "dashboards";
-const RESOURCE_LABEL: Record<ResourceKind, string> = { views: "Views", dashboards: "Dashboards" };
-
 // ---------------------------------------------------------------- Roles
 
-/**
- * One role and the views/dashboards it can read. Permission codes are no longer
- * exposed: a new role starts read-only, and the only decision left is *what* it may
- * read. The built-in System Admin role renders as a locked, non-editable card.
- */
-function RoleCard({ role, resources, onChanged }: {
-  role: Role;
+interface RoleDraft { id?: number; name: string; description: string; viewIds: number[]; dashboardIds: number[]; }
+
+/** Create / edit a role and its view+dashboard access in one modal, saved together. */
+function RoleModal({
+  draft, resources, onClose, onSaved,
+}: {
+  draft: RoleDraft;
   resources: GrantableResources;
-  onChanged: () => void;
+  onClose: () => void;
+  onSaved: () => void;
 }) {
-  const [kind, setKind] = useState<ResourceKind>("views");
+  const [name, setName] = useState(draft.name);
+  const [description, setDescription] = useState(draft.description);
+  const [viewIds, setViewIds] = useState<number[]>(draft.viewIds);
+  const [dashboardIds, setDashboardIds] = useState<number[]>(draft.dashboardIds);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const granted = kind === "views" ? role.view_ids : role.dashboard_ids;
-  const options = resources[kind].map((r) => ({ key: String(r.id), label: r.name }));
+  const viewOpts: CheckOption[] = resources.views.map((v) => ({ id: v.id, label: v.name }));
+  const dashOpts: CheckOption[] = resources.dashboards.map((d) => ({ id: d.id, label: d.name }));
 
-  // Each toggle saves immediately: the list is the source of truth, and an unsaved
-  // checkbox in an access screen is the kind of thing that silently doesn't apply.
-  const toggle = async (idStr: string) => {
-    const id = Number(idStr);
-    const next = granted.includes(id) ? granted.filter((g) => g !== id) : [...granted, id];
+  const save = async () => {
+    if (!name.trim()) return setErr("Give the role a name.");
     setBusy(true); setErr(null);
     try {
-      await api.admin.roles.setResources(role.id, kind === "views" ? { viewIds: next } : { dashboardIds: next });
-      onChanged();
+      const id = draft.id
+        ? (await api.admin.roles.update(draft.id, { name: name.trim(), description: description.trim() })).id
+        : (await api.admin.roles.create({ name: name.trim(), description: description.trim() || undefined })).id;
+      await api.admin.roles.setResources(id, { viewIds, dashboardIds });
+      onSaved();
     } catch (e: any) {
-      setErr(e.message ?? "Could not save access");
+      setErr(e.message ?? "Save failed");
     } finally { setBusy(false); }
   };
 
-  const remove = async () => {
-    if (!confirm(`Delete role "${role.name}"? Users and groups holding it simply lose it. This cannot be undone.`)) return;
-    try { await api.admin.roles.remove(role.id); onChanged(); }
-    catch (e: any) { setErr(e.message ?? "Failed to delete role"); }
-  };
-
-  const named = (kindKey: ResourceKind, ids: number[]) =>
-    resources[kindKey].filter((r) => ids.includes(r.id)).map((r) => r.name);
-  const summary = [
-    ...named("views", role.view_ids).map((n) => `View: ${n}`),
-    ...named("dashboards", role.dashboard_ids).map((n) => `Dashboard: ${n}`),
-  ];
-
-  // The built-in role already reaches everything, permanently. There is nothing to
-  // configure on it, and narrowing it would be a lockout — so show it, locked.
-  if (role.is_system) {
-    return (
-      <div className="role-card system">
-        <div className="role-card-head">
-          <h3>{role.name} <span className="access-level locked">🔒 Built-in</span></h3>
-        </div>
-        {role.description && <p className="muted">{role.description}</p>}
-        <p className="muted small">
-          Full access to every view, dashboard and admin screen. This role is permanent —
-          it cannot be edited, deactivated or deleted. Grant it by adding people to a group
-          that holds it.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="role-card">
-      <div className="role-card-head">
-        <h3>{role.name}</h3>
-        <button className="danger" onClick={remove}>Delete role</button>
-      </div>
-      {role.description && <p className="muted">{role.description}</p>}
-
-      <div className="access-row">
-        <label className="fld inline">
-          Access to
-          <select value={kind} onChange={(e) => setKind(e.target.value as ResourceKind)}>
-            <option value="views">Views</option>
-            <option value="dashboards">Dashboards</option>
-          </select>
-        </label>
-        <MultiCheckDropdown
-          label={`Select ${RESOURCE_LABEL[kind].toLowerCase()}`}
-          options={options}
-          selected={(k) => granted.includes(Number(k))}
-          onToggle={toggle}
-        />
-        <span className="access-level" title="Read access is the only level issued today">Read access</span>
-        {busy && <span className="muted small">saving…</span>}
-      </div>
-
-      {summary.length > 0 ? (
-        <div className="access-chips">
-          {summary.map((s) => <span className="access-chip" key={s}>{s}</span>)}
+    <Modal title={draft.id ? "Edit role" : "Create role"} onClose={onClose} wide>
+      <div className="create-card in-modal">
+        <div className="field-row">
+          <label className="fld">Name
+            <input value={name} autoFocus onChange={(e) => setName(e.target.value)} placeholder="e.g. Auditor" />
+          </label>
+          <label className="fld">Description
+            <input value={description} onChange={(e) => setDescription(e.target.value)}
+                   placeholder="what this role is for" />
+          </label>
         </div>
-      ) : (
-        <p className="muted small">No views or dashboards granted yet.</p>
-      )}
 
-      {err && <div className="login-error">{err}</div>}
-    </div>
+        <p className="muted small">
+          Pick the views and dashboards this role can <b>read</b>. That's the only access level roles grant.
+        </p>
+
+        <div className="grant-cols">
+          <div>
+            <div className="field-label">Views <span className="muted">({viewIds.length})</span></div>
+            <CheckList options={viewOpts} selected={viewIds} onChange={setViewIds}
+                       searchPlaceholder="Search views…" emptyText="No views exist yet." />
+          </div>
+          <div>
+            <div className="field-label">Dashboards <span className="muted">({dashboardIds.length})</span></div>
+            <CheckList options={dashOpts} selected={dashboardIds} onChange={setDashboardIds}
+                       searchPlaceholder="Search dashboards…" emptyText="No dashboards exist yet." />
+          </div>
+        </div>
+
+        {err && <div className="login-error">{err}</div>}
+        <div className="builder-actions">
+          <button className="primary" onClick={save} disabled={busy || !name.trim()}>
+            {busy ? "Saving…" : draft.id ? "Save role" : "Create role"}
+          </button>
+          <button onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -123,15 +95,21 @@ function RolesPanel({
 }: {
   roles: Role[]; resources: GrantableResources; reload: () => void;
 }) {
-  const [newRole, setNewRole] = useState({ name: "", description: "" });
-  const [createOpen, setCreateOpen] = useState(false);
+  const [draft, setDraft] = useState<RoleDraft | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  const createRole = async () => {
-    await api.admin.roles.create(newRole);
-    setNewRole({ name: "", description: "" });
-    setCreateOpen(false);
-    reload();
+  const nameOf = (kind: "views" | "dashboards", ids: number[]) =>
+    resources[kind].filter((r) => ids.includes(r.id)).map((r) => r.name);
+
+  const openCreate = () => setDraft({ name: "", description: "", viewIds: [], dashboardIds: [] });
+  const openEdit = (r: Role) =>
+    setDraft({ id: r.id, name: r.name, description: r.description ?? "", viewIds: r.view_ids ?? [], dashboardIds: r.dashboard_ids ?? [] });
+
+  const remove = async (r: Role) => {
+    if (!confirm(`Delete role "${r.name}"? Groups holding it simply lose it. This cannot be undone.`)) return;
+    try { await api.admin.roles.remove(r.id); reload(); }
+    catch (e: any) { setErr(e.message ?? "Failed to delete role"); }
   };
 
   const exportRoles = () => downloadText(
@@ -147,7 +125,7 @@ function RolesPanel({
         <div className="toolbar-actions">
           <button className="link-btn" onClick={exportRoles}>⬆ Export CSV</button>
           <button className="tb-btn" onClick={() => setImportOpen(true)}>⬇ Import</button>
-          <button className="tb-btn primary" onClick={() => setCreateOpen(true)}>+ Create role</button>
+          <button className="tb-btn primary" onClick={openCreate}>+ Create role</button>
         </div>
       </div>
       <p className="muted small">
@@ -155,32 +133,52 @@ function RolesPanel({
         <b> groups</b> — create a group, give it roles, and add users to it.
       </p>
 
-      {roles.map((r) => (
-        <RoleCard key={r.id} role={r} resources={resources} onChanged={reload} />
-      ))}
+      {err && <div className="login-error">{err}</div>}
 
-      {createOpen && (
-        <Modal title="Create role" onClose={() => setCreateOpen(false)}>
-          <div className="create-card in-modal">
-            <div className="field-row">
-              <label className="fld">Name
-                <input value={newRole.name} autoFocus
-                       onChange={(e) => setNewRole({ ...newRole, name: e.target.value })}
-                       placeholder="e.g. auditor" />
-              </label>
-              <label className="fld">Description
-                <input value={newRole.description}
-                       onChange={(e) => setNewRole({ ...newRole, description: e.target.value })}
-                       placeholder="what this role is for" />
-              </label>
+      {roles.map((r) => {
+        if (r.is_system) {
+          return (
+            <div key={r.id} className="role-card system">
+              <div className="role-card-head">
+                <h3>{r.name} <span className="access-level locked">🔒 Built-in</span></h3>
+              </div>
+              {r.description && <p className="muted">{r.description}</p>}
+              <p className="muted small">
+                Full access to every view, dashboard and admin screen. This role is permanent — it cannot be
+                edited, deactivated or deleted. Grant it by adding people to a group that holds it.
+              </p>
             </div>
-            <div className="form-actions">
-              <button className="primary" disabled={!newRole.name.trim()} onClick={createRole}>Create role</button>
-              <button onClick={() => setCreateOpen(false)}>Cancel</button>
-              <span className="muted small">Grant it views and dashboards after creating.</span>
+          );
+        }
+        const grants = [
+          ...nameOf("views", r.view_ids ?? []).map((n) => ({ kind: "View", n })),
+          ...nameOf("dashboards", r.dashboard_ids ?? []).map((n) => ({ kind: "Dashboard", n })),
+        ];
+        return (
+          <div key={r.id} className="role-card">
+            <div className="role-card-head">
+              <h3>{r.name} <span className="access-level" title="Read access is the only level issued today">Read access</span></h3>
+              <div className="panel-actions">
+                <button onClick={() => openEdit(r)}>Edit</button>
+                <button className="danger" onClick={() => remove(r)}>Delete</button>
+              </div>
             </div>
+            {r.description && <p className="muted">{r.description}</p>}
+            {grants.length > 0 ? (
+              <div className="access-chips">
+                {grants.map((g) => <span className="access-chip" key={`${g.kind}-${g.n}`}><b>{g.kind}:</b> {g.n}</span>)}
+              </div>
+            ) : (
+              <p className="muted small">No views or dashboards granted yet — click Edit to add some.</p>
+            )}
           </div>
-        </Modal>
+        );
+      })}
+
+      {draft && (
+        <RoleModal draft={draft} resources={resources}
+                   onClose={() => setDraft(null)}
+                   onSaved={() => { setDraft(null); reload(); }} />
       )}
 
       {importOpen && (
@@ -224,10 +222,7 @@ function GroupsPanel({ roles, reload: reloadRoles }: { roles: Role[]; reload: ()
   const openCreate = () => { setErr(null); setDraft({ name: "", description: "", roleIds: [], userIds: [] }); };
   const openEdit = (g: UserGroup) => {
     setErr(null);
-    setDraft({
-      id: g.id, name: g.name, description: g.description ?? "",
-      roleIds: g.role_ids ?? [], userIds: g.user_ids ?? [],
-    });
+    setDraft({ id: g.id, name: g.name, description: g.description ?? "", roleIds: g.role_ids ?? [], userIds: g.user_ids ?? [] });
   };
 
   const save = async () => {
@@ -257,10 +252,8 @@ function GroupsPanel({ roles, reload: reloadRoles }: { roles: Role[]; reload: ()
     catch (e: any) { setErr(e.message ?? "Delete failed"); }
   };
 
-  const toggleIn = (list: number[], id: number) =>
-    list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
-
-  const userLabel = (u: SafeUser) => `${u.full_name || u.email} (${u.email})`;
+  const roleOpts: CheckOption[] = roles.map((r) => ({ id: r.id, label: r.name, sub: r.description ?? undefined }));
+  const userOpts: CheckOption[] = users.map((u) => ({ id: u.id, label: u.full_name || u.email, sub: u.email }));
 
   return (
     <>
@@ -297,7 +290,7 @@ function GroupsPanel({ roles, reload: reloadRoles }: { roles: Role[]; reload: ()
                 <td>
                   <div className="panel-actions">
                     <button onClick={() => openEdit(g)}>Edit</button>
-                    <button onClick={() => remove(g)}>✕</button>
+                    <button className="danger" onClick={() => remove(g)}>Delete</button>
                   </div>
                 </td>
               </tr>
@@ -322,22 +315,20 @@ function GroupsPanel({ roles, reload: reloadRoles }: { roles: Role[]; reload: ()
               </label>
             </div>
 
-            <div className="field-label">Roles this group grants</div>
-            <MultiCheckDropdown
-              label="Select roles"
-              options={roles.map((r) => ({ key: String(r.id), label: r.name }))}
-              selected={(k) => draft.roleIds.includes(Number(k))}
-              onToggle={(k) => setDraft({ ...draft, roleIds: toggleIn(draft.roleIds, Number(k)) })}
-            />
-
-            <div className="field-label">Users in this group</div>
-            <MultiCheckDropdown
-              label="Select users"
-              options={users.map((u) => ({ key: String(u.id), label: userLabel(u) }))}
-              selected={(k) => draft.userIds.includes(Number(k))}
-              onToggle={(k) => setDraft({ ...draft, userIds: toggleIn(draft.userIds, Number(k)) })}
-            />
-            <p className="muted small">{draft.userIds.length} user{draft.userIds.length === 1 ? "" : "s"} selected.</p>
+            <div className="grant-cols">
+              <div>
+                <div className="field-label">Roles this group grants <span className="muted">({draft.roleIds.length})</span></div>
+                <CheckList options={roleOpts} selected={draft.roleIds}
+                           onChange={(ids) => setDraft({ ...draft, roleIds: ids })}
+                           searchPlaceholder="Search roles…" emptyText="No roles yet — create one first." />
+              </div>
+              <div>
+                <div className="field-label">Users in this group <span className="muted">({draft.userIds.length})</span></div>
+                <CheckList options={userOpts} selected={draft.userIds}
+                           onChange={(ids) => setDraft({ ...draft, userIds: ids })}
+                           searchPlaceholder="Search users…" emptyText="No users yet." />
+              </div>
+            </div>
 
             {err && <div className="login-error">{err}</div>}
             <div className="builder-actions">

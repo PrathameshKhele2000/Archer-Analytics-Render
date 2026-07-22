@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put } from "@nestjs/common";
 import { Permissions } from "../common/decorators/permissions.decorator";
 import { CreateRoleDto } from "./dto/create-role.dto";
 import { ImportRolesDto } from "./dto/import-roles.dto";
 import { SetPermissionsDto } from "./dto/set-permissions.dto";
 import { SetResourcesDto } from "./dto/set-resources.dto";
+import { UpdateRoleDto } from "./dto/update-role.dto";
 import { RolesService } from "./roles.service";
 
 @Controller("api/admin/roles")
@@ -36,6 +37,11 @@ export class RolesController {
   @Post()
   create(@Body() dto: CreateRoleDto) {
     return this.roles.create(dto);
+  }
+
+  @Patch(":id")
+  update(@Param("id", ParseIntPipe) id: number, @Body() dto: UpdateRoleDto) {
+    return this.roles.update(id, dto.name, dto.description);
   }
 
   @Put(":id/permissions")

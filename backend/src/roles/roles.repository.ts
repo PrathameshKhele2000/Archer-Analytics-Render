@@ -106,6 +106,14 @@ export class RolesRepository extends BaseRepository<RoleRow> {
     await this.query(`UPDATE roles SET description=$2 WHERE id=$1`, [id, description ?? null]);
   }
 
+  /** Update a role's name and/or description. undefined leaves that field as-is. */
+  async updateDetails(id: number, name?: string, description?: string): Promise<void> {
+    await this.query(
+      `UPDATE roles SET name = COALESCE($2, name), description = $3 WHERE id = $1`,
+      [id, name ?? null, description ?? null],
+    );
+  }
+
   async findById(id: number): Promise<RoleRow | null> {
     const { rows } = await this.query<RoleRow>(`SELECT * FROM roles WHERE id=$1`, [id]);
     return rows[0] ?? null;

@@ -250,6 +250,29 @@ button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color
 .access-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .access-chip { font-size: 12px; color: var(--ink); background: var(--bg);
   border: 1px solid var(--hairline); border-radius: 3px; padding: 3px 8px; }
+.access-chip b { font-weight: 600; color: var(--muted); }
+
+/* Two-column grant pickers in the role/group modals. */
+.grant-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 6px 0 4px; }
+
+/* ---- CheckList: framed, searchable multi-select ---- */
+.checklist { border: 1px solid var(--hairline); border-radius: 6px; background: var(--surface); overflow: hidden; }
+.checklist-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; background: var(--bg); border-bottom: 1px solid var(--hairline); }
+.checklist-count { font-size: 12px; font-weight: 600; color: var(--muted); }
+.checklist-search { width: 100%; border: none; border-bottom: 1px solid var(--hairline);
+  padding: 8px 10px; font-size: 13px; border-radius: 0; }
+.checklist-search:focus { outline: none; border-bottom-color: var(--accent); }
+.checklist-items { overflow-y: auto; }
+.checklist-item { display: flex; align-items: flex-start; gap: 9px; padding: 7px 10px;
+  cursor: pointer; border-bottom: 1px solid var(--hairline); }
+.checklist-item:last-child { border-bottom: none; }
+.checklist-item:hover { background: var(--accent-soft); }
+.checklist-item.on { background: var(--accent-soft); }
+.checklist-item input { margin-top: 2px; }
+.checklist-label { display: flex; flex-direction: column; line-height: 1.3; font-size: 13px; color: var(--ink); }
+.checklist-sub { font-size: 11px; color: var(--muted); }
+.checklist-empty { padding: 14px 10px; font-size: 12px; color: var(--muted); text-align: center; }
 .sync-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .sync-actions button, .admin-tab button,
 .datasets-tab .records-table button:not(.tb-btn), .views-tab .records-table button:not(.tb-btn) {
@@ -775,6 +798,7 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
   /* Access Control: grant controls stack instead of squeezing */
   .access-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .fld.inline { flex-direction: column; align-items: stretch; }
+  .grant-cols { grid-template-columns: 1fr; }
 
   /* Dataset cards: one per row so the stats stay readable */
   .ds-picker { padding: 12px; gap: 8px; }

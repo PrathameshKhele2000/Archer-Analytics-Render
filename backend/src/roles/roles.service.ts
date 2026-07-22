@@ -72,6 +72,22 @@ export class RolesService {
     return this.mustFind(roleId);
   }
 
+  /** Rename / re-describe a role. System Admin is fixed; names stay unique. */
+  async update(roleId: number, name?: string, description?: string) {
+    this.assertEditable(await this.mustFind(roleId));
+    const trimmed = name?.trim();
+    if (trimmed !== undefined) {
+      if (!trimmed) throw new BadRequestException("Role name cannot be empty.");
+      if (trimmed.toLowerCase() === SYSTEM_ADMIN_ROLE.toLowerCase()) {
+        throw new ConflictException(`'${SYSTEM_ADMIN_ROLE}' is reserved.`);
+      }
+      const clash = await this.repo.findByName(trimmed);
+      if (clash && clash.id !== roleId) throw new ConflictException("A role with this name already exists.");
+    }
+    await this.repo.updateDetails(roleId, trimmed, description);
+    return this.mustFind(roleId);
+  }
+
   /** Delete a custom role. The built-in System Admin role cannot be deleted. */
   async remove(id: number) {
     const role = await this.repo.findById(id);
