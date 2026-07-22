@@ -48,7 +48,7 @@ export class UsersService {
     const existing = await this.repo.findByEmail(dto.email);
     if (existing) throw new ConflictException("Email already registered");
     const hash = await bcrypt.hash(dto.password, 10);
-    const created = await this.repo.create(dto.email, hash, dto.fullName);
+    const created = await this.repo.create(dto.email, hash, dto.fullName, { bu: dto.bu, sbu: dto.sbu });
     if (dto.roleIds?.length) await this.repo.setRoles(created.id, dto.roleIds);
     return toSafeUser(await this.mustFind(created.id));
   }
@@ -63,6 +63,8 @@ export class UsersService {
     await this.repo.updateProfile(id, {
       fullName: dto.fullName,
       email: dto.email?.trim().toLowerCase(),
+      bu: dto.bu?.trim(),
+      sbu: dto.sbu?.trim(),
       isActive: dto.isActive,
     });
     if (dto.password) await this.repo.updatePassword(id, await bcrypt.hash(dto.password, 10));
@@ -108,7 +110,7 @@ export class UsersService {
         const existing = await this.repo.findByEmail(email);
 
         if (existing) {
-          await this.repo.updateProfile(existing.id, { fullName: row.fullName });
+          await this.repo.updateProfile(existing.id, { fullName: row.fullName, bu: row.bu, sbu: row.sbu });
           if (row.roles !== undefined) await this.repo.setRoles(existing.id, roleIds);
           summary.updated++;
           summary.results.push({ row: i + 1, key: email, status: "updated", message: note });
@@ -120,7 +122,7 @@ export class UsersService {
             tempPassword = password;
           }
           const hash = await bcrypt.hash(password, 10);
-          const created = await this.repo.create(email, hash, row.fullName);
+          const created = await this.repo.create(email, hash, row.fullName, { bu: row.bu, sbu: row.sbu });
           if (roleIds.length) await this.repo.setRoles(created.id, roleIds);
           summary.created++;
           summary.results.push({ row: i + 1, key: email, status: "created", message: note, tempPassword });

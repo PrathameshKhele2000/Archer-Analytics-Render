@@ -12,6 +12,7 @@ import {
   CreateMyDashboardDto,
   DrillDto,
   GrantAccessDto,
+  PreviewDrillDto,
   UpdateChartWidgetDto,
   UpdateMyDashboardDto,
 } from "./dto/dashboard.dto";
@@ -52,6 +53,13 @@ export class DashboardController {
   @Permissions("dashboard:create")
   preview(@CurrentUser() user: AuthenticatedUser, @Body() spec: ChartSpecDto) {
     return this.dashboards.previewQuery(spec, user);
+  }
+
+  /** Live preview of a drill step, so the designer can click through before saving. */
+  @Post("query-preview/drill")
+  @Permissions("dashboard:create")
+  previewDrill(@CurrentUser() user: AuthenticatedUser, @Body() dto: PreviewDrillDto) {
+    return this.dashboards.previewDrill(dto.spec, dto.steps, user);
   }
 
   @Post()

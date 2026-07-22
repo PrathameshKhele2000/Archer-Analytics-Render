@@ -848,3 +848,25 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 .agg-row .builder-field { flex: 1 1 150px; min-width: 140px; }
 .mode-hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin: 2px 0 2px; }
 @media (max-width: 700px) { .agg-row { flex-direction: column; align-items: stretch; } }
+
+/* ---- Chart theme picker (Theme tab in the chart designer) ---- */
+.theme-picker { display: flex; flex-direction: column; gap: 8px; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.theme-tile {
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 8px;
+  border: 1px solid var(--hairline); border-radius: 4px; background: var(--surface);
+  cursor: pointer; font-family: var(--font-sans);
+}
+.theme-tile.active { border-color: var(--accent); background: var(--accent-soft); }
+.theme-swatches { display: flex; gap: 2px; }
+/* flex:1 so the six swatches always fill the tile evenly, whatever its width. */
+.theme-swatch { flex: 1; height: 14px; border-radius: 2px; }
+.theme-name { font-size: 11px; color: var(--muted); text-align: left; }
+
+/* ---- Drill breadcrumb above the designer's live preview ---- */
+.preview-drillbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
+  font-size: 11px; padding: 2px 0 5px; }
+.preview-drillbar .link-btn { font-size: 11px; }
+.preview-drillbar .link-btn:disabled { color: var(--muted); text-decoration: none; cursor: default; }
+.preview-drillbar .sep { color: var(--muted); }
+.preview-drillbar .hint { margin-left: auto; font-size: 10px; color: var(--muted); font-style: italic; }

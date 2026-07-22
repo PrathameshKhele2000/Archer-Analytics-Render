@@ -3,6 +3,9 @@ export interface UserRow {
   email: string;
   password_hash: string;
   full_name: string;
+  /** Business Unit / Sub Business Unit the user belongs to (free text, optional). */
+  bu: string | null;
+  sbu: string | null;
   is_active: boolean;
   last_login_at: string | null;
   created_at: string;

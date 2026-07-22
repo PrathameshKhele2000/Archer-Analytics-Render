@@ -3,7 +3,7 @@ import { api, DashboardWidget, DrillStep, Finding, QueryRow } from "../api";
 import { buildCsv, downloadText } from "../csv";
 import { formatCell } from "../recordColumns";
 import ExportMenu from "./ExportMenu";
-import GenericChart, { legendNames, SeriesLegend } from "./GenericChart";
+import GenericChart, { legendNames, paletteOf, SeriesLegend } from "./GenericChart";
 
 const humanize = (k?: string | null) => (k ? k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : "");
 
@@ -182,7 +182,8 @@ export default function DrilldownChart({
         {drillEnabled && !records && atLeaf && <span className="hint">click a section to see records</span>}
 
         <span className="drill-right">
-          {showLegendCtl && <SeriesLegend variant="inline" names={legendVals} hidden={hidden} onToggle={toggleSeries} />}
+          {showLegendCtl && <SeriesLegend variant="inline" names={legendVals} hidden={hidden}
+                                         onToggle={toggleSeries} palette={paletteOf(spec.theme)} />}
           <span className="chart-export"><ExportMenu onExport={doExport} busy={exporting} /></span>
         </span>
       </div>
@@ -196,7 +197,9 @@ export default function DrilldownChart({
           type={widget.widget_type}
           rows={rows}
           showLegend={spec.showLegend}
+          theme={spec.theme}
           hidden={hidden}
+          onToggleHidden={toggleSeries}
           clauseLevels={spec.mode === "clause" ? (spec.groupBy ?? []).map(humanize) : undefined}
           onSliceClick={drillEnabled ? onSectionClick : undefined}
         />

@@ -261,7 +261,10 @@
       "Bash(python3 -c 'import sys,json;print\\([d[\"name\"] for d in json.load\\(sys.stdin\\)]\\)')",
       "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\) *)",
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT age, sum\\(days_open\\) FROM fact_findings GROUP BY age ORDER BY age\")",
-      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT age, round\\(avg\\(cnt\\),1\\) AS avg_cnt, min\\(cnt\\) AS min_cnt, max\\(cnt\\) AS max_cnt, sum\\(cnt\\) AS total FROM \\(SELECT age, cve_type, count\\(*\\) AS cnt FROM fact_findings GROUP BY 1,2\\) s GROUP BY age ORDER BY age\")"
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT age, round\\(avg\\(cnt\\),1\\) AS avg_cnt, min\\(cnt\\) AS min_cnt, max\\(cnt\\) AS max_cnt, sum\\(cnt\\) AS total FROM \\(SELECT age, cve_type, count\\(*\\) AS cnt FROM fact_findings GROUP BY 1,2\\) s GROUP BY age ORDER BY age\")",
+      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\);print\\(\"enum ops:\",[o[\"key\"] for o in d[\"operators\"].get\\(\"enum\",[]\\)]\\)')",
+      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\);print\\(json.dumps\\(d[\"operators\"].get\\(\"enum\"\\),indent=0\\)[:300]\\)')",
+      "Bash(curl -s localhost:8000/api/dashboards -H 'authorization: Bearer __TRACKED_VAR__')"
     ]
   }
 }

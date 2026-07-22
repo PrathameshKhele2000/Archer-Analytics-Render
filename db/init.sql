@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS users (
     email         TEXT UNIQUE NOT NULL,
     password_hash TEXT,                         -- NULL for SSO-only accounts
     full_name     TEXT NOT NULL,
+    bu            TEXT,                          -- Business Unit
+    sbu           TEXT,                          -- Sub Business Unit
     auth_provider TEXT NOT NULL DEFAULT 'local',-- 'local' | 'oidc'
     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMPTZ,
@@ -42,6 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 -- Idempotent upgrades for databases created before these columns existed:
 ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bu TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sbu TEXT;
 ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS roles (

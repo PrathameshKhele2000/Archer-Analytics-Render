@@ -80,6 +80,7 @@ export interface ChartSpec {
   openOnly?: boolean; // legacy back-compat
   limit?: number | null; // max groups returned
   showLegend?: boolean; // presentation only
+  theme?: string | null; // presentation only: which colour palette the chart draws with
   drilldown?: string[] | null; // ordered dimensions to descend into on click
   caption?: string | null; // presentation only ("what vs what")
   tableColumns?: string[] | null; // presentation only: which columns a table chart shows
@@ -424,30 +425,87 @@ export function clauseMeasureParts(spec: ChartSpec): { valueCols: string; reaggE
 }
 
 /**
- * Matview definition for a Grouping (clause) chart: the FULL multi-level breakdown —
- * one row per (g0, g1, …, gN) combination with the measure's re-aggregatable components.
- * Small (the product of the levels' cardinalities), so the base chart and every drill
- * level then re-aggregate this tiny table instead of scanning the 10M-row source. Inline
- * literals so it can back a CREATE MATERIALIZED VIEW; expressions are whitelisted and
- * values escaped. Returns null when there are no levels (nothing to pre-aggregate).
+ * Decompose a MEASURE into the parts a breakdown matview must store, plus the
+ * expression that recombines them at any level. This is what lets a drill read the
+ * tiny matview instead of the source table — but only when the recombination is
+ * exact, so a drilled number is never an approximation of the live one.
+ *
+ * count/sum are additive; min-of-mins and max-of-maxes are correct. An average of
+ * averages is NOT, so avg stores its numerator and denominator separately and only
+ * divides at read time. Anything whose shape we can't recognise returns null, and
+ * that chart keeps the previous (live) drill rather than risking a wrong number.
  */
-export function buildClauseMatviewInline(spec: ChartSpec, catalog: Catalog): string | null {
+export function measureReaggParts(expr: string): { valueCols: string; reaggExpr: string } | null {
+  // Catalog measures are wrapped for display, e.g. round(sum(f.days_open), 1).
+  const rounded = /^\s*round\s*\(\s*([\s\S]*)\s*,\s*\d+\s*\)\s*$/.exec(expr);
+  const core = (rounded ? rounded[1] : expr).trim();
+  const fn = /^(count|sum|avg|min|max)\s*\(([\s\S]*)\)$/i.exec(core);
+  if (!fn) return null;
+  const arg = fn[2];
+  switch (fn[1].toLowerCase()) {
+    case "count": return { valueCols: `${core} AS _v`, reaggExpr: `sum(_v)` };
+    case "sum":   return { valueCols: `${core} AS _v`, reaggExpr: `round(sum(_v), 1)` };
+    case "min":   return { valueCols: `${core} AS _v`, reaggExpr: `min(_v)` };
+    case "max":   return { valueCols: `${core} AS _v`, reaggExpr: `max(_v)` };
+    case "avg":   return {
+      valueCols: `sum(${arg}) AS _v, count(${arg}) AS _n`,
+      reaggExpr: `round(sum(_v) / nullif(sum(_n), 0), 1)`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Matview definition for a chart that drills: the FULL multi-level breakdown — one row
+ * per (g0, g1, …, gN) combination with the measure's re-aggregatable components. Small
+ * (the product of the levels' cardinalities), so the base chart and every drill level
+ * then re-aggregate this tiny table instead of scanning the 10M-row source. Inline
+ * literals so it can back a CREATE MATERIALIZED VIEW; expressions are whitelisted and
+ * values escaped. Returns null when there is nothing to pre-aggregate.
+ *
+ * `levels` is the chart's drill sequence: the group-by levels for a Grouping chart, or
+ * [X axis, ...drill-down path] for a Calculate Values chart — both drill the same way,
+ * so both get the same treatment.
+ */
+export function buildBreakdownMatviewInline(
+  spec: ChartSpec,
+  catalog: Catalog,
+  levels: string[],
+  parts: { valueCols: string; reaggExpr: string },
+  /** Split-by dimensions, kept as a `s` column so the base level can still show series. */
+  seriesKeys: string[] = [],
+): string | null {
   validateSpec(spec, catalog);
-  const levels = groupByKeys(spec);
   if (!levels.length) return null;
-  const { valueCols } = clauseMeasureParts(spec);
+  const { valueCols } = parts;
   const { where, params } = buildChartWhere(spec, catalog); // chart's own filter only (no drill)
-  const exprs = levels.map((k) => catalog.dimensions[k].expr);
+  const dims = levels.map((k) => catalog.dimensions[k]);
+  const exprs = dims.map((d) => d.expr);
   const cols = exprs.map((e, i) => `${e} AS g${i}`);
+  // A dimension can define its own ordering (e.g. severity Critical→Low rather than
+  // alphabetical). Carry it alongside each level so reading the matview sorts the bars
+  // exactly as the live query would.
+  dims.forEach((d, i) => cols.push(`${d.order ?? d.expr} AS o${i}`));
+  const groupCols = [...exprs];
+  if (seriesKeys.length) {
+    const sExprs = seriesKeys.map((k) => catalog.dimensions[k].expr);
+    cols.push(`concat_ws(' / ', ${sExprs.join(", ")}) AS s`);
+    groupCols.push(...sExprs);
+  }
   cols.push(valueCols);
   const sql = `
     SELECT ${cols.join(", ")}
     ${catalog.baseFrom}
     ${where}
-    GROUP BY ${exprs.join(", ")}
+    GROUP BY ${groupCols.join(", ")}
     LIMIT ${CLAUSE_MATVIEW_CAP}
   `;
   return sql.replace(/\$(\d+)/g, (_m, n) => inlineLiteral(params[Number(n) - 1]));
+}
+
+/** Breakdown matview for a Grouping (clause) chart: its levels, counted. */
+export function buildClauseMatviewInline(spec: ChartSpec, catalog: Catalog): string | null {
+  return buildBreakdownMatviewInline(spec, catalog, groupByKeys(spec), clauseMeasureParts(spec));
 }
 
 /**

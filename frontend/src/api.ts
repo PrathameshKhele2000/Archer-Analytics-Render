@@ -281,6 +281,8 @@ export interface ChartSpec {
   openOnly?: boolean;
   limit?: number | null;
   showLegend?: boolean;
+  /** Colour palette key (see CHART_THEMES). Presentation only. */
+  theme?: string | null;
   drilldown?: string[] | null;
   caption?: string | null;
   tableColumns?: string[] | null;
@@ -399,6 +401,9 @@ export const api = {
         /** True when the numbers came from a sample of a very large table (designer only). */
         approximate?: boolean;
       }>("/api/dashboards/query-preview", spec),
+    /** Drill one level into an UNSAVED spec — lets the designer preview the drill path. */
+    previewDrill: (spec: ChartSpec, steps: DrillStep[]) =>
+      post<DrillResult & { approximate?: boolean }>("/api/dashboards/query-preview/drill", { spec, steps }),
     create: (body: { name: string; description?: string }) =>
       post<DashboardMeta>("/api/dashboards", body),
     update: (key: string, body: { name?: string; description?: string }) =>
@@ -460,9 +465,9 @@ export const api = {
   admin: {
     users: {
       list: () => get<SafeUser[]>("/api/admin/users"),
-      create: (body: { email: string; password: string; fullName: string; roleIds?: number[] }) =>
+      create: (body: { email: string; password: string; fullName: string; bu?: string; sbu?: string; roleIds?: number[] }) =>
         post<SafeUser>("/api/admin/users", body),
-      update: (id: number, body: Partial<{ fullName: string; email: string; password: string; isActive: boolean; roleIds: number[] }>) =>
+      update: (id: number, body: Partial<{ fullName: string; email: string; password: string; bu: string; sbu: string; isActive: boolean; roleIds: number[] }>) =>
         patch<SafeUser>(`/api/admin/users/${id}`, body),
       remove: (id: number) => del<void>(`/api/admin/users/${id}`),
       import: (users: ImportUserRow[]) => post<ImportSummary>("/api/admin/users/import", { users }),
@@ -541,7 +546,7 @@ export const api = {
   },
 };
 
-export interface ImportUserRow { email: string; fullName: string; password?: string; roles?: string[]; }
+export interface ImportUserRow { email: string; fullName: string; bu?: string; sbu?: string; password?: string; roles?: string[]; }
 export interface ImportRoleRow { name: string; description?: string; permissions?: string[]; }
 export interface ImportRowResult {
   row: number; key: string; status: "created" | "updated" | "error"; message?: string; tempPassword?: string;

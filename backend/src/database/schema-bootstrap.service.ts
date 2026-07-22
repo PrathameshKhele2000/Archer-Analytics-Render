@@ -32,6 +32,13 @@ export class SchemaBootstrapService implements OnApplicationBootstrap {
       sql: `ALTER TABLE reports ADD COLUMN IF NOT EXISTS row_limit INTEGER`,
     },
     {
+      // Org placement of a user: Business Unit and Sub Business Unit. Free text —
+      // they mirror the Archer field values, which are not a fixed list here.
+      name: "users.bu/sbu",
+      sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS bu TEXT,
+                              ADD COLUMN IF NOT EXISTS sbu TEXT`,
+    },
+    {
       name: "user_group",
       sql: `CREATE TABLE IF NOT EXISTS user_group (
               id          SERIAL PRIMARY KEY,

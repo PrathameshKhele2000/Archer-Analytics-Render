@@ -2,6 +2,9 @@ export interface SafeUser {
   id: number;
   email: string;
   full_name: string;
+  /** Business Unit / Sub Business Unit (optional, free text). */
+  bu: string | null;
+  sbu: string | null;
   is_active: boolean;
   last_login_at: string | null;
   created_at: string;

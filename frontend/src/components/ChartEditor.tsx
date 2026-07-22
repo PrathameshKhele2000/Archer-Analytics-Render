@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ChartSpec, ChartTypeDef, DashboardSchema, FieldsCatalog, FilterCondition, QueryRow, RecordRow } from "../api";
+import { api, ChartSpec, ChartTypeDef, DashboardSchema, DrillStep, FieldsCatalog, FilterCondition, QueryRow, RecordRow } from "../api";
 
 import FilterConditions from "./FilterConditions";
-import GenericChart from "./GenericChart";
+import GenericChart, { CHART_THEMES } from "./GenericChart";
 import MultiCheckDropdown from "./MultiCheckDropdown";
 import { RecordsTableView } from "./RecordsChart";
 
@@ -52,6 +52,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   const [conditions, setConditions] = useState<FilterCondition[]>(existing?.spec.conditions ?? []);
   const [logic, setLogic] = useState(existing?.spec.logic ?? "");
   const [showLegend, setShowLegend] = useState(existing?.spec.showLegend ?? true);
+  const [theme, setTheme] = useState(existing?.spec.theme ?? "default");
   const [limit, setLimit] = useState<string>(existing?.spec.limit ? String(existing.spec.limit) : "50");
   const [drilldown, setDrilldown] = useState<string[]>(existing?.spec.drilldown ?? []);
   const [tableColumns, setTableColumns] = useState<string[] | null>(existing?.spec.tableColumns ?? null);
@@ -85,7 +86,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   const [previewing, setPreviewing] = useState(false); // a preview request is in flight
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"chart" | "options" | "drill" | "filters">("chart");
+  const [tab, setTab] = useState<"chart" | "options" | "drill" | "filters" | "theme">("chart");
 
   useEffect(() => {
     // View mode loads the chosen view's schema (its dataset's fields, scoped by the
@@ -178,6 +179,13 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   }, [schema, chartType, isCompare, isClause, measure, groupAgg, dimension, groupBy, compareField, needsDimension, supportsSeries]);
 
   const isTable = chartType === "table";
+  // Whether this chart has a colour key at all, i.e. whether "Show legend" does anything.
+  // Pie/donut colour by slice; Compare and a split-by Group By colour by series.
+  // Grouping (clause) shows one level at a time, so it is single-series like a plain bar.
+  const hasLegend =
+    ["pie", "donut"].includes(chartType) ||
+    isCompare ||
+    (!isClause && supportsSeries && groupBy.length > 0);
   // Record columns a Table (records list) chart can show, with the user's selection applied.
   const colShown = (key: string) => (tableColumns ? tableColumns.includes(key) : defaultRecordCols.includes(key));
   const toggleTableCol = (key: string) => {
@@ -205,13 +213,14 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
     conditions: conditions.length ? conditions : null,
     logic: logic.trim() || null,
     showLegend,
+    theme,
     limit: limit ? Number(limit) : null,
     // Grouping mode drills through its group-by levels, so it carries no separate
     // drill-down path.
     drilldown: needsDimension && !isClause ? drilldown : [],
     caption,
     tableColumns: chartType === "table" ? tableColumns : null,
-  }), [viewMode, dataset, viewKey, chartType, isCompare, isClause, dimension, groupBy, compareField, measure, groupAgg, conditions, logic, showLegend, limit, drilldown, caption, needsDimension, supportsSeries, tableColumns]);
+  }), [viewMode, dataset, viewKey, chartType, isCompare, isClause, dimension, groupBy, compareField, measure, groupAgg, conditions, logic, showLegend, theme, limit, drilldown, caption, needsDimension, supportsSeries, tableColumns]);
 
   // Group By options: dimensions not on the X axis or already picked at an earlier level.
   const groupByOptions = (atIndex: number) =>
@@ -228,28 +237,68 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
 
   const previewSeq = useRef(0);
 
-  // Debounced live preview whenever the spec changes.
+  /**
+   * The drill path this chart will have once saved: in Grouping mode the group-by
+   * levels ARE the path; otherwise it's the X axis followed by the drill-down levels.
+   * The preview walks exactly this, so what the designer clicks through is what the
+   * saved chart does.
+   */
+  const drillSequence = useMemo(
+    () => (isClause ? groupBy : [dimension, ...drilldown]).filter(Boolean) as string[],
+    [isClause, groupBy, dimension, drilldown],
+  );
+  const [previewSteps, setPreviewSteps] = useState<DrillStep[]>([]);
+  // Any change to the path invalidates a drill already in progress.
+  useEffect(() => { setPreviewSteps([]); }, [drillSequence.join("|"), chartType, viewKey, dataset]);
+
+  const previewLevel = previewSteps.length;
+  const previewDim = drillSequence[previewLevel] ?? null;
+  const previewAtLeaf = previewLevel >= drillSequence.length - 1;
+  const canPreviewDrill = !isTable && !isCompare && chartType !== "number" && !previewAtLeaf;
+
+  /**
+   * Presentation-only fields don't change the query, so they're stripped before the
+   * preview request: recolouring the chart or renaming it must not re-scan the table
+   * (and it keeps the server's preview cache warm across those edits).
+   */
+  const querySpecJson = useMemo(() => {
+    const { caption: _c, showLegend: _l, theme: _t, ...q } = spec;
+    return JSON.stringify(q);
+  }, [spec]);
+
+  // Debounced live preview whenever the query-relevant part of the spec — or the
+  // drill position — changes. Filters are part of the spec, so they apply here too.
   useEffect(() => {
     if (!schema) return;
     if (needsDimension && !isClause && !dimension) return;
     if (isCompare && !compareField) return;   // wait for the Y field in Compare Fields mode
     if (isClause && !groupBy.length) return;  // wait for at least one grouping level
+    const querySpec: ChartSpec = JSON.parse(querySpecJson);
     const t = setTimeout(() => {
       setError(null);
       // Previews can take seconds on a big dataset, so responses may land out of order.
       // Only the newest request is allowed to write to the preview.
       const seq = ++previewSeq.current;
       setPreviewing(true);
-      api.dashboards.preview(spec)
-        .then((r) => {
+      const req = previewSteps.length
+        ? api.dashboards.previewDrill(querySpec, previewSteps)
+        : api.dashboards.preview(querySpec);
+      req
+        .then((r: any) => {
           if (seq !== previewSeq.current) return;
           setResult({ rows: r.rows, approximate: !!r.approximate });
         })
-        .catch((e) => { if (seq === previewSeq.current) setError(e.message ?? "Preview failed"); })
+        .catch((e) => {
+          if (seq !== previewSeq.current) return;
+          setError(e.message ?? "Preview failed");
+          // A drill that the server rejects (e.g. the path changed under us) must not
+          // leave the preview stuck at a level it can't render.
+          if (previewSteps.length) setPreviewSteps([]);
+        })
         .finally(() => { if (seq === previewSeq.current) setPreviewing(false); });
     }, 250);
     return () => clearTimeout(t);
-  }, [spec, schema, needsDimension, dimension, isClause, isCompare, compareField, groupBy]);
+  }, [querySpecJson, previewSteps, schema, needsDimension, dimension, isClause, isCompare, compareField, groupBy]);
 
   const save = async () => {
     if (!title.trim()) return setError("Give the chart a title.");
@@ -274,6 +323,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
     // Grouping mode has no separate drill-down: its group-by levels ARE the drill path.
     ...(needsDimension && !isClause ? [{ key: "drill" as const, label: "Drill-down" }] : []),
     { key: "filters", label: "Filter" },
+    { key: "theme", label: "Theme" },
   ];
   const activeTab = TABS.some((t) => t.key === tab) ? tab : "chart";
 
@@ -475,9 +525,17 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
           {activeTab === "options" && (
             <div className="editor-display">
               <label className="chk">
-                <input type="checkbox" checked={showLegend} onChange={(e) => setShowLegend(e.target.checked)} />
+                <input type="checkbox" checked={showLegend} disabled={!hasLegend}
+                       onChange={(e) => setShowLegend(e.target.checked)} />
                 Show legend
               </label>
+              <p className="muted small">
+                {hasLegend
+                  ? "Draws the colour key under the chart. Click an entry to hide that slice or series."
+                  : "A legend explains what each COLOUR means, so this chart has none to show — "
+                    + "every bar is already named on its axis. Add a Group By (or switch to Pie/Donut) "
+                    + "to give colour a meaning, and the legend turns on."}
+              </p>
               <label className="inline-field">
                 Row limit
                 <input type="number" min={1} max={1000} value={limit}
@@ -514,6 +572,29 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
             <FilterConditions conditions={conditions} logic={logic} catalog={filterCatalog}
                               onChange={(c, l) => { setConditions(c); setLogic(l); }} />
           )}
+
+          {activeTab === "theme" && (
+            <div className="theme-picker">
+              <p className="muted small">
+                The colour palette this chart draws with. Series and slices take their colours in
+                order, so the same theme keeps a dashboard looking consistent.
+              </p>
+              <div className="theme-grid">
+                {CHART_THEMES.map((t) => (
+                  <button key={t.key} type="button"
+                          className={`theme-tile${theme === t.key ? " active" : ""}`}
+                          onClick={() => setTheme(t.key)}>
+                    <span className="theme-swatches">
+                      {t.colors.slice(0, 6).map((c) => (
+                        <span key={c} className="theme-swatch" style={{ background: c }} />
+                      ))}
+                    </span>
+                    <span className="theme-name">{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="caption-preview">{caption}</div>
@@ -537,6 +618,27 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
             </span>
           )}
         </div>
+        {/* Drill breadcrumb: where in the drill path the preview currently sits. */}
+        {!isTable && drillSequence.length > 1 && (
+          <div className="preview-drillbar">
+            <button type="button" className="link-btn" disabled={!previewSteps.length}
+                    onClick={() => setPreviewSteps([])}>
+              {labelOf("dimensions", drillSequence[0])}
+            </button>
+            {previewSteps.map((s, i) => (
+              <span key={i}>
+                <span className="sep"> › </span>
+                <button type="button" className="link-btn"
+                        onClick={() => setPreviewSteps((p) => p.slice(0, i + 1))}>
+                  {s.value}
+                </button>
+              </span>
+            ))}
+            <span className="hint">
+              {canPreviewDrill ? "click a section to drill in" : "deepest level"}
+            </span>
+          </div>
+        )}
         <div className={`preview-panel${previewing ? " is-loading" : ""}`}>
           {isTable ? (
             preview.length
@@ -553,7 +655,13 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
               type={chartType}
               rows={preview}
               showLegend={showLegend}
-              clauseLevels={isClause ? groupBy.map((g) => labelOf("dimensions", g)) : undefined}
+              theme={theme}
+              // Drilled levels are a plain one-dimension breakdown, so the multi-column
+              // clause layout only applies at the base level.
+              clauseLevels={isClause && !previewLevel ? groupBy.map((g) => labelOf("dimensions", g)) : undefined}
+              onSliceClick={canPreviewDrill && previewDim
+                ? (value) => setPreviewSteps((p) => [...p, { dimension: previewDim, value }])
+                : undefined}
             />
           ) : (
             <div className="loading">No data for this selection.</div>

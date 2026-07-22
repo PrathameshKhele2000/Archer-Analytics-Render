@@ -47,7 +47,7 @@ export default function App() {
       // roles/groups). A non-admin's own creations belong exclusively to their
       // Personalized Dashboard tab, so they're filtered out here — System Admin keeps
       // seeing everything (that tab is their workspace and they have no personal tab).
-      const rows = user && !user.roles.includes("System Admin")
+      const rows = user && !hasPermission(user, "admin:dashboards:manage")
         ? all.filter((d) => d.owner_user_id !== user.id)
         : all;
       setDashboards(rows);

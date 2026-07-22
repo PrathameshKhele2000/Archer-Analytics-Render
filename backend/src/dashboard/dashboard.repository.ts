@@ -142,15 +142,21 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
    */
   async aggregateChartMatview(
     widgetId: number, level: number, stepValues: string[], limit: number, reaggExpr: string,
+    /** Keep the split-by series (base level of a split chart); drill levels drop it. */
+    withSeries = false,
   ): Promise<any[]> {
     const conds = stepValues.map((_, i) => `g${i} = $${i + 1}`);
     const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const sel = withSeries ? `g${level} AS x, s AS series` : `g${level} AS x`;
+    const grp = withSeries ? `g${level}, s` : `g${level}`;
     const { rows } = await this.query(
-      `SELECT g${level} AS x, ${reaggExpr} AS y
+      // o<level> carries the dimension's own ordering; it is functionally dependent on
+      // g<level>, so min() just picks it up without widening the grouping.
+      `SELECT ${sel}, ${reaggExpr} AS y
        FROM mv_chart_${widgetId}
        ${where}
-       GROUP BY g${level}
-       ORDER BY g${level}
+       GROUP BY ${grp}
+       ORDER BY min(o${level})
        LIMIT ${Math.min(1000, Math.max(1, limit))}`,
       stepValues,
     );

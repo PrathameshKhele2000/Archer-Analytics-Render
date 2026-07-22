@@ -11,6 +11,14 @@ export class ImportUserDto {
 
   @IsString()
   @IsOptional()
+  bu?: string;
+
+  @IsString()
+  @IsOptional()
+  sbu?: string;
+
+  @IsString()
+  @IsOptional()
   password?: string; // if omitted for a new user, a temp password is generated and returned
 
   @IsArray()

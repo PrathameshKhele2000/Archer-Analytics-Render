@@ -17,20 +17,20 @@ function genPassword(): string {
 }
 
 const USER_TEMPLATE =
-  "email,fullName,password,roles\n" +
-  "jane.doe@corp.local,Jane Doe,,analyst;viewer\n" +
-  "john.roe@corp.local,John Roe,ChangeMe123!,admin\n";
+  "email,fullName,bu,sbu,password,roles\n" +
+  "jane.doe@corp.local,Jane Doe,Technology,Platform Engineering,,analyst;viewer\n" +
+  "john.roe@corp.local,John Roe,Finance,Treasury,ChangeMe123!,admin\n";
 
 function UsersTab({ currentUserId }: { currentUserId: number }) {
   const [users, setUsers] = useState<SafeUser[]>([]);
-  const [form, setForm] = useState({ email: "", password: "", fullName: "" });
+  const [form, setForm] = useState({ email: "", password: "", fullName: "", bu: "", sbu: "" });
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   // Edit user
   const [editUser, setEditUser] = useState<SafeUser | null>(null);
-  const [editForm, setEditForm] = useState({ email: "", fullName: "", password: "" });
+  const [editForm, setEditForm] = useState({ email: "", fullName: "", bu: "", sbu: "", password: "" });
   const [editErr, setEditErr] = useState<string | null>(null);
 
   const load = () => {
@@ -40,7 +40,7 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
 
   const openEdit = (u: SafeUser) => {
     setEditErr(null);
-    setEditForm({ email: u.email, fullName: u.full_name, password: "" });
+    setEditForm({ email: u.email, fullName: u.full_name, bu: u.bu ?? "", sbu: u.sbu ?? "", password: "" });
     setEditUser(u);
   };
 
@@ -53,6 +53,8 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
       await api.admin.users.update(editUser.id, {
         email: editForm.email.trim(),
         fullName: editForm.fullName.trim(),
+        bu: editForm.bu.trim(),
+        sbu: editForm.sbu.trim(),
         ...(editForm.password ? { password: editForm.password } : {}),
       });
       setEditUser(null);
@@ -80,7 +82,7 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
     }
     try {
       await api.admin.users.create(form);
-      setForm({ email: "", password: "", fullName: "" });
+      setForm({ email: "", password: "", fullName: "", bu: "", sbu: "" });
       setCreateOpen(false);
       load();
     } catch (e: any) {
@@ -95,8 +97,8 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
 
   const exportUsers = () => downloadText(
     "users-export.csv",
-    buildCsv(["email", "fullName", "password", "roles"],
-      users.map((u) => [u.email, u.full_name, "", u.roles.join(";")])),
+    buildCsv(["email", "fullName", "bu", "sbu", "password", "roles"],
+      users.map((u) => [u.email, u.full_name, u.bu ?? "", u.sbu ?? "", "", u.roles.join(";")])),
   );
 
   return (
@@ -110,12 +112,14 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
         </div>
       </div>
       <table className="findings">
-        <thead><tr><th>Email</th><th>Name</th><th>Roles (from groups)</th><th>Active</th><th>Last login</th><th /></tr></thead>
+        <thead><tr><th>Email</th><th>Name</th><th>BU</th><th>SBU</th><th>Roles (from groups)</th><th>Active</th><th>Last login</th><th /></tr></thead>
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
               <td>{u.email}</td>
               <td>{u.full_name}</td>
+              <td>{u.bu || "—"}</td>
+              <td>{u.sbu || "—"}</td>
               <td>{u.roles.join(", ")}</td>
               <td>{u.is_active ? "Yes" : "No"}</td>
               <td className="num">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "—"}</td>
@@ -142,6 +146,16 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
               <label className="fld">Full name
                 <input value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })}
                        placeholder="Jane Doe" />
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="fld">BU <span className="muted small">(Business Unit)</span>
+                <input value={form.bu} onChange={(e) => setForm({ ...form, bu: e.target.value })}
+                       placeholder="e.g. Technology" />
+              </label>
+              <label className="fld">SBU <span className="muted small">(Sub Business Unit)</span>
+                <input value={form.sbu} onChange={(e) => setForm({ ...form, sbu: e.target.value })}
+                       placeholder="e.g. Platform Engineering" />
               </label>
             </div>
             <div className="field-row">
@@ -179,6 +193,16 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
               </label>
             </div>
             <div className="field-row">
+              <label className="fld">BU <span className="muted small">(Business Unit)</span>
+                <input value={editForm.bu} onChange={(e) => setEditForm({ ...editForm, bu: e.target.value })}
+                       placeholder="e.g. Technology" />
+              </label>
+              <label className="fld">SBU <span className="muted small">(Sub Business Unit)</span>
+                <input value={editForm.sbu} onChange={(e) => setEditForm({ ...editForm, sbu: e.target.value })}
+                       placeholder="e.g. Platform Engineering" />
+              </label>
+            </div>
+            <div className="field-row">
               <label className="fld">Reset password <span className="muted small">(leave blank to keep current)</span>
                 <input type="text" value={editForm.password} placeholder="min 8 chars"
                        onChange={(e) => setEditForm({ ...editForm, password: e.target.value })} />
@@ -203,15 +227,16 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
         <Modal title="Import users" onClose={() => setImportOpen(false)} wide>
           <ImportPanel<ImportUserRow>
             title="Import users from CSV"
-            hint="Columns: email, fullName, password, roles. Leave password blank to auto-generate one. Separate multiple roles with ; (e.g. analyst;viewer). Existing emails are updated."
+            hint="Columns: email, fullName, bu, sbu, password, roles. Leave password blank to auto-generate one. Separate multiple roles with ; (e.g. analyst;viewer). Existing emails are updated."
             templateName="users-template.csv"
             templateContent={USER_TEMPLATE}
-            columns={["Email", "Name", "Password", "Roles"]}
+            columns={["Email", "Name", "BU", "SBU", "Password", "Roles"]}
             parse={(objs) => objs.map((o) => ({
               email: o.email, fullName: o.fullname ?? o["full name"] ?? o.name ?? "",
+              bu: o.bu || undefined, sbu: o.sbu || undefined,
               password: o.password || undefined, roles: splitList(o.roles),
             }))}
-            toCells={(r) => [r.email, r.fullName, r.password ? "••••••" : "(auto-generated)", (r.roles ?? []).join(", ")]}
+            toCells={(r) => [r.email, r.fullName, r.bu ?? "", r.sbu ?? "", r.password ? "••••••" : "(auto-generated)", (r.roles ?? []).join(", ")]}
             onImport={(rows) => api.admin.users.import(rows)}
             onDone={load}
           />

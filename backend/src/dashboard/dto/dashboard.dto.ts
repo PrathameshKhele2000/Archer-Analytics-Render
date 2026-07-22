@@ -210,6 +210,11 @@ export class ChartSpecDto {
   @IsOptional()
   showLegend?: boolean;
 
+  /** Colour palette the chart draws with. Presentation only — never touches the SQL. */
+  @IsIn(["default", "ocean", "forest", "sunset", "berry", "slate", "vivid"])
+  @IsOptional()
+  theme?: string | null;
+
   @IsArray()
   @IsString({ each: true })
   @ArrayMaxSize(5)
@@ -236,6 +241,18 @@ export class DrillStepDto {
 }
 
 export class DrillDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DrillStepDto)
+  steps!: DrillStepDto[];
+}
+
+/** Drill one step deeper into an UNSAVED spec (live preview in the chart designer). */
+export class PreviewDrillDto {
+  @ValidateNested()
+  @Type(() => ChartSpecDto)
+  spec!: ChartSpecDto;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => DrillStepDto)

@@ -59,10 +59,16 @@ export class UsersRepository extends BaseRepository<UserRow> {
     return rows;
   }
 
-  async create(email: string, passwordHash: string, fullName: string): Promise<UserRow> {
+  async create(
+    email: string,
+    passwordHash: string,
+    fullName: string,
+    org: { bu?: string | null; sbu?: string | null } = {},
+  ): Promise<UserRow> {
     const { rows } = await this.query<UserRow>(
-      `INSERT INTO users (email, password_hash, full_name) VALUES ($1,$2,$3) RETURNING *`,
-      [email, passwordHash, fullName],
+      `INSERT INTO users (email, password_hash, full_name, bu, sbu)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [email, passwordHash, fullName, org.bu ?? null, org.sbu ?? null],
     );
     return rows[0];
   }
@@ -87,7 +93,10 @@ export class UsersRepository extends BaseRepository<UserRow> {
     return (await this.findByIdEnriched(id))!;
   }
 
-  async updateProfile(id: number, fields: { fullName?: string; email?: string; isActive?: boolean }): Promise<void> {
+  async updateProfile(
+    id: number,
+    fields: { fullName?: string; email?: string; bu?: string | null; sbu?: string | null; isActive?: boolean },
+  ): Promise<void> {
     const sets: string[] = [];
     const params: any[] = [id];
     if (fields.fullName !== undefined) {
@@ -97,6 +106,15 @@ export class UsersRepository extends BaseRepository<UserRow> {
     if (fields.email !== undefined) {
       params.push(fields.email);
       sets.push(`email=$${params.length}`);
+    }
+    // An empty string means "clear it", so it is stored as NULL rather than ''.
+    if (fields.bu !== undefined) {
+      params.push(fields.bu || null);
+      sets.push(`bu=$${params.length}`);
+    }
+    if (fields.sbu !== undefined) {
+      params.push(fields.sbu || null);
+      sets.push(`sbu=$${params.length}`);
     }
     if (fields.isActive !== undefined) {
       params.push(fields.isActive);

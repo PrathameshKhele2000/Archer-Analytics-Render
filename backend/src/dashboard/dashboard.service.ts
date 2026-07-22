@@ -8,7 +8,7 @@ import { CacheService } from "../cache/cache.service";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { DATA_SOURCE_CATALOG, QUERY_BUILDER_SOURCE } from "./dashboard.entity";
 import { DashboardRepository } from "./dashboard.repository";
-import { buildAggregation, buildAggregationInline, buildClauseMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, mergeScope, schemaCatalog } from "./query-builder";
+import { buildAggregation, buildAggregationInline, buildBreakdownMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, groupAggOf, measureReaggParts, mergeScope, schemaCatalog } from "./query-builder";
 import { Logger } from "@nestjs/common";
 import { CatalogService } from "../datasets/catalog.service";
 import { ReportsService } from "../reports/reports.service";
@@ -97,15 +97,43 @@ export class DashboardService {
     return spec.mode === "clause" && (spec.groupBy?.length ?? 0) > 0;
   }
 
+  /**
+   * Whether this chart stores the FULL per-level breakdown (so every drill level is a
+   * re-aggregation of a tiny matview) — and if so, how its value is stored and recombined.
+   * Null means the chart keeps a plain single-result matview and drills live.
+   *
+   * Any chart that drills qualifies: Grouping walks its group-by levels, Calculate Values
+   * walks [X axis, ...drill-down]. A split-by chart keeps its series in the breakdown so
+   * the base level can still show them (drill levels drop series, as they always have).
+   * Only a measure that cannot be recombined exactly (see measureReaggParts) stays live.
+   */
+  private breakdownFor(
+    spec: ChartSpec,
+    catalog: any,
+  ): { levels: string[]; parts: { valueCols: string; reaggExpr: string }; seriesKeys: string[] } | null {
+    if (spec.chartType === "table") return null;
+    if (DashboardService.isClauseChart(spec)) {
+      return { levels: drillSequence(spec), parts: clauseMeasureParts(spec), seriesKeys: [] };
+    }
+    if (spec.mode === "compare") return null;
+    if (!spec.drilldown?.length) return null; // nothing to drill into
+    const parts = measureReaggParts(catalog.measures[spec.measure]?.expr ?? "");
+    if (!parts) return null;
+    const seriesKeys = (spec.groupBy?.length ? spec.groupBy : spec.series ? [spec.series] : [])
+      .filter((k) => catalog.dimensions[k]);
+    return { levels: drillSequence(spec), parts, seriesKeys };
+  }
+
   /** (Re)build a chart's materialized view; best-effort — charts still work live if this fails. */
   private async syncChartMatview(widgetId: number, spec: ChartSpec): Promise<void> {
     if (spec.chartType === "table") return; // records list: no aggregation, no matview
     try {
       const catalog = await this.catalogFor(spec);
-      // A Grouping chart pre-aggregates EVERY level (g0..gN) so drilling reads the tiny
+      // A drilling chart pre-aggregates EVERY level (g0..gN) so drilling reads the tiny
       // matview instead of the 10M-row source. Other charts store their single result set.
-      const inline = DashboardService.isClauseChart(spec)
-        ? buildClauseMatviewInline(spec, catalog)
+      const breakdown = this.breakdownFor(spec, catalog);
+      const inline = breakdown
+        ? buildBreakdownMatviewInline(spec, catalog, breakdown.levels, breakdown.parts, breakdown.seriesKeys)
         : buildAggregationInline(spec, catalog);
       if (inline) await this.repo.createChartMatview(widgetId, inline);
     } catch (e: any) {
@@ -131,13 +159,15 @@ export class DashboardService {
         const { sql, params } = buildRecordsChartQuery(spec, catalog);
         return await this.repo.runAggregation(sql, params);
       }
-      const clause = DashboardService.isClauseChart(spec);
+      const breakdown = this.breakdownFor(spec, catalog);
       try {
-        // Grouping charts show the FIRST level, re-aggregated from the breakdown matview
+        // A drilling chart shows the FIRST level, re-aggregated from the breakdown matview
         // (the measure recombined from its stored components); everything else reads its
         // stored result set directly.
-        return clause
-          ? await this.repo.aggregateChartMatview(widget.id, 0, [], resolveChartLimit(spec.limit), clauseMeasureParts(spec).reaggExpr)
+        return breakdown
+          ? await this.repo.aggregateChartMatview(
+              widget.id, 0, [], resolveChartLimit(spec.limit), breakdown.parts.reaggExpr,
+              breakdown.seriesKeys.length > 0)
           : await this.repo.readChartMatview(widget.id);
       } catch {
         // No matview yet (new chart, or its build is still running). Serve the answer
@@ -260,6 +290,46 @@ export class DashboardService {
     return result;
   }
 
+  /**
+   * Live preview of a DRILL step on an unsaved spec, so the designer can click through
+   * the drill path before saving. There is no matview yet (that's built on save), so
+   * this runs the drill query directly — against the same sample the base preview uses,
+   * which is what keeps it sub-second on a 10M-row table.
+   */
+  async previewDrill(specDto: ChartSpecDto, steps: DrillStep[], user?: AuthenticatedUser) {
+    this.assertChartSource(specDto as ChartSpec, user);
+    const spec = await this.resolveSpec(specDto as ChartSpec, user);
+
+    // Each step must follow the chart's own drill sequence — the same rule the saved
+    // chart enforces, so the preview cannot show a path the real chart won't allow.
+    const sequence = drillSequence(spec);
+    steps.forEach((step, i) => {
+      if (step.dimension !== sequence[i]) {
+        throw new BadRequestException("Drill path does not match this chart's drill-down sequence");
+      }
+    });
+
+    const cacheKey = `dash:preview:drill:${JSON.stringify({ spec, steps })}`;
+    const cached = await this.cache.getJson<any>(cacheKey);
+    if (cached) return cached;
+
+    const catalog = await this.catalogFor(spec);
+    const sampled = await this.sampledCatalog(catalog);
+    const { sql, params, dimension, atLeaf } = buildDrill(spec, sampled?.catalog ?? catalog, steps);
+    let rows = dimension ? await this.repo.runAggregation(sql, params) : [];
+    if (sampled && rows.length) {
+      const measureExpr = catalog.measures[spec.measure]?.expr ?? catalog.measures.count.expr;
+      // A Grouping chart's avg/min/max roll-up is not additive, so it must not be scaled.
+      const additive = DashboardService.isClauseChart(spec)
+        ? ["count", "sum"].includes(groupAggOf(spec))
+        : DashboardService.isAdditive(measureExpr);
+      if (additive) rows = rows.map((r) => ({ ...r, y: Math.round(Number(r.y) * sampled.scale) }));
+    }
+    const result = { rows, dimension, atLeaf, approximate: !!sampled };
+    await this.cache.setJson(cacheKey, result, 300);
+    return result;
+  }
+
   /** Validate a chart spec (throws 400 on bad keys), for either the aggregation or records path. */
   private async validateChartSpec(spec: ChartSpec): Promise<void> {
     const catalog = await this.catalogFor(spec);
@@ -368,10 +438,14 @@ export class DashboardService {
     }
     const spec = await this.resolveSpec(widget.config as unknown as ChartSpec, user);
 
-    // Fast path: a Grouping chart's matview holds every level, so drilling is a tiny
-    // re-aggregation of it (~ms) rather than a fresh scan of the 10M-row source (~8s).
-    if (DashboardService.isClauseChart(spec)) {
-      const sequence = drillSequence(spec);
+    const catalog = await this.catalogFor(spec);
+
+    // Fast path: a drilling chart's matview holds every level, so drilling is a tiny
+    // re-aggregation of it (~ms) rather than a fresh scan of the 10M-row source, which
+    // costs seconds at the first level and tens of seconds deeper in.
+    const breakdown = this.breakdownFor(spec, catalog);
+    if (breakdown) {
+      const sequence = breakdown.levels;
       steps.forEach((step, i) => {
         if (step.dimension !== sequence[i]) {
           throw new BadRequestException("Drill path does not match this chart's drill-down sequence");
@@ -381,8 +455,7 @@ export class DashboardService {
       const levelDim = sequence[level] ?? null;
       if (!levelDim) return { rows: [], dimension: null, atLeaf: true };
       try {
-        const reagg = clauseMeasureParts(spec).reaggExpr;
-        const rows = await this.repo.aggregateChartMatview(widgetId, level, steps.map((s) => s.value), resolveChartLimit(spec.limit), reagg);
+        const rows = await this.repo.aggregateChartMatview(widgetId, level, steps.map((s) => s.value), resolveChartLimit(spec.limit), breakdown.parts.reaggExpr);
         return { rows, dimension: levelDim, atLeaf: level + 1 >= sequence.length };
       } catch (e: any) {
         // Matview not built yet — fall through to the live query below.
@@ -390,7 +463,7 @@ export class DashboardService {
       }
     }
 
-    const { sql, params, dimension, atLeaf } = buildDrill(spec, await this.catalogFor(spec), steps);
+    const { sql, params, dimension, atLeaf } = buildDrill(spec, catalog, steps);
     const rows = dimension ? await this.repo.runAggregation(sql, params) : [];
     return { rows, dimension, atLeaf };
   }
