@@ -8,7 +8,7 @@ import { CacheService } from "../cache/cache.service";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { DATA_SOURCE_CATALOG, QUERY_BUILDER_SOURCE } from "./dashboard.entity";
 import { DashboardRepository } from "./dashboard.repository";
-import { buildAggregation, buildAggregationInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, DrillStep, mergeScope, schemaCatalog } from "./query-builder";
+import { buildAggregation, buildAggregationInline, buildClauseMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, mergeScope, schemaCatalog } from "./query-builder";
 import { Logger } from "@nestjs/common";
 import { CatalogService } from "../datasets/catalog.service";
 import { ReportsService } from "../reports/reports.service";
@@ -26,6 +26,12 @@ import {
 } from "./dto/dashboard.dto";
 
 const DEFAULT_DATASET = "archer-findings";
+
+/** Groups shown per chart level (matches the query-builder's default/cap). */
+function resolveChartLimit(limit?: number | null): number {
+  if (limit == null || !Number.isFinite(limit)) return 50;
+  return Math.min(1000, Math.max(1, Math.floor(limit)));
+}
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "dashboard";
@@ -86,12 +92,22 @@ export class DashboardService {
     return this.catalogs.forDataset(spec.dataset || DEFAULT_DATASET);
   }
 
+  /** Grouping chart with at least one level — its matview holds the full breakdown. */
+  private static isClauseChart(spec: ChartSpec): boolean {
+    return spec.mode === "clause" && (spec.groupBy?.length ?? 0) > 0;
+  }
+
   /** (Re)build a chart's materialized view; best-effort — charts still work live if this fails. */
   private async syncChartMatview(widgetId: number, spec: ChartSpec): Promise<void> {
     if (spec.chartType === "table") return; // records list: no aggregation, no matview
     try {
       const catalog = await this.catalogFor(spec);
-      await this.repo.createChartMatview(widgetId, buildAggregationInline(spec, catalog));
+      // A Grouping chart pre-aggregates EVERY level (g0..gN) so drilling reads the tiny
+      // matview instead of the 10M-row source. Other charts store their single result set.
+      const inline = DashboardService.isClauseChart(spec)
+        ? buildClauseMatviewInline(spec, catalog)
+        : buildAggregationInline(spec, catalog);
+      if (inline) await this.repo.createChartMatview(widgetId, inline);
     } catch (e: any) {
       this.log.warn(`chart matview mv_chart_${widgetId} build failed: ${e?.message ?? e}`);
     }
@@ -115,8 +131,14 @@ export class DashboardService {
         const { sql, params } = buildRecordsChartQuery(spec, catalog);
         return await this.repo.runAggregation(sql, params);
       }
+      const clause = DashboardService.isClauseChart(spec);
       try {
-        return await this.repo.readChartMatview(widget.id);
+        // Grouping charts show the FIRST level, re-aggregated from the breakdown matview
+        // (the measure recombined from its stored components); everything else reads its
+        // stored result set directly.
+        return clause
+          ? await this.repo.aggregateChartMatview(widget.id, 0, [], resolveChartLimit(spec.limit), clauseMeasureParts(spec).reaggExpr)
+          : await this.repo.readChartMatview(widget.id);
       } catch {
         // No matview yet (new chart, or its build is still running). Serve the answer
         // LIVE right now and build the matview in the background — building it here
@@ -345,6 +367,29 @@ export class DashboardService {
       throw new NotFoundException("Chart not found");
     }
     const spec = await this.resolveSpec(widget.config as unknown as ChartSpec, user);
+
+    // Fast path: a Grouping chart's matview holds every level, so drilling is a tiny
+    // re-aggregation of it (~ms) rather than a fresh scan of the 10M-row source (~8s).
+    if (DashboardService.isClauseChart(spec)) {
+      const sequence = drillSequence(spec);
+      steps.forEach((step, i) => {
+        if (step.dimension !== sequence[i]) {
+          throw new BadRequestException("Drill path does not match this chart's drill-down sequence");
+        }
+      });
+      const level = steps.length;
+      const levelDim = sequence[level] ?? null;
+      if (!levelDim) return { rows: [], dimension: null, atLeaf: true };
+      try {
+        const reagg = clauseMeasureParts(spec).reaggExpr;
+        const rows = await this.repo.aggregateChartMatview(widgetId, level, steps.map((s) => s.value), resolveChartLimit(spec.limit), reagg);
+        return { rows, dimension: levelDim, atLeaf: level + 1 >= sequence.length };
+      } catch (e: any) {
+        // Matview not built yet — fall through to the live query below.
+        this.log.warn(`drill matview miss for ${widgetId}, live fallback: ${e?.message ?? e}`);
+      }
+    }
+
     const { sql, params, dimension, atLeaf } = buildDrill(spec, await this.catalogFor(spec), steps);
     const rows = dimension ? await this.repo.runAggregation(sql, params) : [];
     return { rows, dimension, atLeaf };
@@ -359,8 +404,9 @@ export class DashboardService {
       throw new NotFoundException("Chart not found");
     }
     const spec = await this.resolveSpec(widget.config as unknown as ChartSpec, user);
-    // Each step's dimension must follow the chart's own drill sequence.
-    const sequence = [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean) as string[];
+    // Each step's dimension must follow the chart's own drill sequence (the group-by
+    // levels in Grouping mode, else the base dimension + drill-down path).
+    const sequence = drillSequence(spec);
     steps.forEach((step, i) => {
       if (step.dimension !== sequence[i]) {
         throw new BadRequestException("Drill path does not match this chart's drill-down sequence");

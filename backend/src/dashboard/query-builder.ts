@@ -67,6 +67,13 @@ export interface ChartSpec {
   groupBy?: string[] | null; // multilevel Group By (aggregate mode) — combined into the series
   compareField?: string | null; // Y-axis field in Compare Fields mode (any dimension, incl. text)
   measure: string; // Y-axis aggregate (aggregate mode); ignored (count) in compare mode
+  /**
+   * Grouping (clause) mode: how the RECORD COUNTS of the deepest sub-groups are rolled
+   * up into each displayed bar. count/sum = total records; avg/min/max = average /
+   * smallest / largest records per deepest sub-group under the bar. No field involved —
+   * it always operates on record counts.
+   */
+  groupAgg?: string | null;
   conditions?: FilterCondition[] | null; // numbered filter conditions (shared with reports)
   logic?: string | null; // manual logic expression, e.g. "1 AND (2 OR 3)"
   filters?: Record<string, string> | null; // legacy: dimension-keyed equality (back-compat)
@@ -110,6 +117,16 @@ function groupByKeys(spec: ChartSpec): string[] {
   return spec.series ? [spec.series] : [];
 }
 
+/**
+ * The ordered dimensions a chart drills through. In Grouping (clause) mode the group-by
+ * levels themselves are the hierarchy; otherwise it's the base X dimension followed by
+ * the configured drill-down path.
+ */
+export function drillSequence(spec: ChartSpec): string[] {
+  if (spec.mode === "clause") return groupByKeys(spec);
+  return [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean) as string[];
+}
+
 /** Resolve a chart's filter to {conditions, logic}, converting the legacy dimension-keyed form. */
 function specConditions(spec: ChartSpec): { conditions: FilterCondition[]; logic?: string | null } {
   if (spec.conditions && spec.conditions.length) return { conditions: spec.conditions, logic: spec.logic };
@@ -130,8 +147,20 @@ function buildChartWhere(spec: ChartSpec, catalog: Catalog, drill?: DrillStep[])
   for (const step of drill ?? []) {
     const dim = catalog.dimensions[step.dimension];
     if (!dim) throw new BadRequestException(`Unknown drill-down dimension '${step.dimension}'`);
-    params.push(step.value);
-    clauses.push(`${dim.expr} = $${params.length}`);
+    // Filter the RAW column when we have one, so the equality can use an index instead
+    // of scanning the whole table through the COALESCE expression. '(none)' is the
+    // COALESCE fallback for NULL, so it maps to `IS NULL`.
+    if (dim.sourceCol) {
+      if (step.value === "(none)") {
+        clauses.push(`${dim.sourceCol} IS NULL`);
+      } else {
+        params.push(step.value);
+        clauses.push(`${dim.sourceCol} = $${params.length}`);
+      }
+    } else {
+      params.push(step.value);
+      clauses.push(`${dim.expr} = $${params.length}`);
+    }
   }
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
@@ -200,6 +229,9 @@ export function validateSpec(spec: ChartSpec, catalog: Catalog): void {
       if (!catalog.dimensions[g]) throw new BadRequestException(`Unknown Group By dimension '${g}'`);
     }
     if (!catalog.measures[spec.measure]) throw new BadRequestException(`Unknown measure '${spec.measure}'`);
+    if (spec.groupAgg && !GROUP_AGGS.has(spec.groupAgg)) {
+      throw new BadRequestException(`Unknown grouping aggregation '${spec.groupAgg}'`);
+    }
   } else if (spec.mode === "compare") {
     // Compare Fields: X field × Y field, value = count. Y (compareField) becomes the series.
     if (!chart.supportsSeries) {
@@ -264,42 +296,58 @@ function buildAggregationCore(spec: ChartSpec, catalog: Catalog, opts: AggOpts =
   const { where, params } = buildChartWhere(spec, catalog, opts.drill);
   const limit = resolveLimit(spec.limit);
 
-  // ---- Clause (Group & Count): no X/Y, just N grouping levels + the measure. Each
-  // level becomes its own column (g0, g1, ...) so the UI can render a real table.
-  if (spec.mode === "clause" && !opts.dimensionOverride) {
-    const levels = groupByKeys(spec);
-    if (!levels.length) {
-      // "Group by nothing" = the overall total, as a single row.
-      return { sql: `SELECT ${measureExpr} AS y ${catalog.baseFrom} ${where}`, params };
-    }
-    const exprs = levels.map((k) => catalog.dimensions[k].expr);
-    const cols = exprs.map((e, i) => `${e} AS g${i}`);
-    cols.push(`${measureExpr} AS y`);
-    return {
-      sql: `
-    SELECT ${cols.join(", ")}
-    ${catalog.baseFrom}
-    ${where}
-    GROUP BY ${exprs.join(", ")}
-    ORDER BY ${exprs.map((_, i) => `g${i}`).join(", ")}
-    LIMIT ${limit}
-  `,
-      params,
-    };
+  // ---- Clause (Grouping): the group-by levels form a DRILL HIERARCHY. The base chart
+  // shows the FIRST level; clicking a bar/slice descends to the next level, filtered by
+  // the clicked value (see buildDrill). So it renders like an ordinary single-dimension
+  // chart — clickable and drillable — instead of a wall of "A / B / C" composite bars.
+  const clauseLevels = spec.mode === "clause" ? groupByKeys(spec) : null;
+
+  // No grouping dimension in play — aggregate 'number', or Grouping with zero levels —
+  // means a single overall value.
+  const noDimension = clauseLevels
+    ? clauseLevels.length === 0 && !opts.dimensionOverride
+    : !chart.needsDimension && !opts.dimensionOverride;
+  if (noDimension) {
+    return { sql: `SELECT ${measureExpr} AS y ${catalog.baseFrom} ${where}`, params };
   }
 
-  const dimKey = opts.dimensionOverride ?? spec.dimension;
-  // Single-value chart with no grouping dimension (aggregate mode only).
-  if (!chart.needsDimension && !opts.dimensionOverride) {
-    return { sql: `SELECT ${measureExpr} AS y ${catalog.baseFrom} ${where}`, params };
+  const dimKey = opts.dimensionOverride ?? (clauseLevels ? clauseLevels[0] : spec.dimension);
+
+  // Grouping with avg/min/max: those roll up the record counts of the DEEPEST
+  // sub-groups, so the live query nests — inner counts every (g0..gN) combination,
+  // outer rolls the displayed level up from those counts. (count/sum equal a plain
+  // count(*) per bar and keep the simpler single-level query below.)
+  if (clauseLevels) {
+    const agg = groupAggOf(spec);
+    if (agg === "avg" || agg === "min" || agg === "max") {
+      const li = Math.max(0, clauseLevels.indexOf(dimKey!));
+      const exprs = clauseLevels.map((k, i) => `${catalog.dimensions[k].expr} AS g${i}`);
+      const { reaggExpr } = clauseMeasureParts(spec);
+      return {
+        sql: `
+    SELECT g${li} AS x, ${reaggExpr.replace(/_v/g, "cnt")} AS y
+    FROM (
+      SELECT ${exprs.join(", ")}, count(*) AS cnt
+      ${catalog.baseFrom}
+      ${where}
+      GROUP BY ${clauseLevels.map((k) => catalog.dimensions[k].expr).join(", ")}
+    ) sub
+    GROUP BY g${li}
+    ORDER BY g${li}
+    LIMIT ${limit}
+  `,
+        params,
+      };
+    }
   }
 
   const dim = catalog.dimensions[dimKey!];
   const selectCols = [`${dim.expr} AS x`];
   const groupCols = [dim.expr];
   // Compare mode: Y field is the series. Aggregate mode: one or more Group By levels,
-  // combined into a single "A / B / C" series label.
-  const seriesKeys: string[] = opts.dropSeries
+  // combined into a single "A / B / C" series label. Clause is a drill hierarchy — one
+  // level at a time — so it never carries a split series.
+  const seriesKeys: string[] = (opts.dropSeries || clauseLevels)
     ? []
     : isCompare
       ? spec.compareField ? [spec.compareField] : []
@@ -345,6 +393,63 @@ export function buildAggregationInline(spec: ChartSpec, catalog: Catalog): strin
   return sql.replace(/\$(\d+)/g, (_m, n) => inlineLiteral(params[Number(n) - 1]));
 }
 
+/** Safety cap on distinct group combinations a clause matview stores. */
+const CLAUSE_MATVIEW_CAP = 200_000;
+
+/** The roll-ups Grouping offers over sub-group record counts. */
+const GROUP_AGGS = new Set(["count", "sum", "avg", "min", "max"]);
+
+/** The chart's groupAgg, defaulting to a plain record count. */
+export function groupAggOf(spec: ChartSpec): string {
+  return spec.groupAgg && GROUP_AGGS.has(spec.groupAgg) ? spec.groupAgg : "count";
+}
+
+/**
+ * How a Grouping chart's value is stored in the matview and rolled up when reading any
+ * level. The matview holds the DEEPEST breakdown — one row per (g0..gN) combination
+ * with its record count — and every aggregation operates on those COUNTS (no field):
+ *   - count / sum → total records under the bar        (sum of sub-group counts)
+ *   - avg         → average records per deepest sub-group (avg is NOT additive, which
+ *                   is exactly why the matview stores the raw per-combination counts)
+ *   - min / max   → smallest / largest sub-group count
+ */
+export function clauseMeasureParts(spec: ChartSpec): { valueCols: string; reaggExpr: string } {
+  const valueCols = `count(*) AS _v`;
+  switch (groupAggOf(spec)) {
+    case "avg": return { valueCols, reaggExpr: `round(avg(_v), 1)` };
+    case "min": return { valueCols, reaggExpr: `min(_v)` };
+    case "max": return { valueCols, reaggExpr: `max(_v)` };
+    default:    return { valueCols, reaggExpr: `sum(_v)` }; // count & sum: total records
+  }
+}
+
+/**
+ * Matview definition for a Grouping (clause) chart: the FULL multi-level breakdown —
+ * one row per (g0, g1, …, gN) combination with the measure's re-aggregatable components.
+ * Small (the product of the levels' cardinalities), so the base chart and every drill
+ * level then re-aggregate this tiny table instead of scanning the 10M-row source. Inline
+ * literals so it can back a CREATE MATERIALIZED VIEW; expressions are whitelisted and
+ * values escaped. Returns null when there are no levels (nothing to pre-aggregate).
+ */
+export function buildClauseMatviewInline(spec: ChartSpec, catalog: Catalog): string | null {
+  validateSpec(spec, catalog);
+  const levels = groupByKeys(spec);
+  if (!levels.length) return null;
+  const { valueCols } = clauseMeasureParts(spec);
+  const { where, params } = buildChartWhere(spec, catalog); // chart's own filter only (no drill)
+  const exprs = levels.map((k) => catalog.dimensions[k].expr);
+  const cols = exprs.map((e, i) => `${e} AS g${i}`);
+  cols.push(valueCols);
+  const sql = `
+    SELECT ${cols.join(", ")}
+    ${catalog.baseFrom}
+    ${where}
+    GROUP BY ${exprs.join(", ")}
+    LIMIT ${CLAUSE_MATVIEW_CAP}
+  `;
+  return sql.replace(/\$(\d+)/g, (_m, n) => inlineLiteral(params[Number(n) - 1]));
+}
+
 /**
  * Given a saved chart spec and the accumulated clicks, produce the next drill
  * level's query. The step path is validated against the chart's own predefined
@@ -355,7 +460,9 @@ export function buildDrill(
   catalog: Catalog,
   steps: DrillStep[],
 ): { sql: string; params: any[]; dimension: string | null; atLeaf: boolean } {
-  const sequence = [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean) as string[];
+  // In Grouping mode the group-by levels ARE the drill hierarchy; otherwise it's the
+  // base dimension plus the configured drill-down path.
+  const sequence = drillSequence(spec);
   steps.forEach((step, i) => {
     if (step.dimension !== sequence[i]) {
       throw new BadRequestException("Drill path does not match this chart's drill-down sequence");
@@ -389,12 +496,18 @@ export function buildRecordsQuery(
   const cappedLimit = Math.min(1000, Math.max(1, limit));
   const recordCols = Object.values(catalog.recordFields).map((c) => `${c.expr} AS ${c.key}`).join(", ");
   const orderBy = recordsOrderBy(catalog);
+
+  // These drill columns are low-cardinality (a handful of distinct values), so neither a
+  // bitmap-AND of their indexes (lossy, rechecks millions of rows) nor an `ORDER BY <date>
+  // LIMIT` index scan (scans most of the table) is fast. Instead grab a sample of matching
+  // rows with a bare LIMIT — a seq scan that STOPS as soon as it has enough — then order
+  // just that sample for display. Measured: ~25s -> well under a second. (The sample is
+  // representative rather than the strict newest-N, which is the right trade for a
+  // "records behind this selection" peek.)
   const sql = `
     SELECT ${recordCols}
-    ${catalog.baseFrom}
-    ${where}
+    FROM (SELECT * ${catalog.baseFrom} ${where} LIMIT ${cappedLimit}) f
     ORDER BY ${orderBy}
-    LIMIT ${cappedLimit}
   `;
   return { sql, params };
 }

@@ -3,7 +3,16 @@ import { DbService } from "../database/db.service";
 import { DatasetFieldRow, DatasetRow } from "./dataset.entity";
 import { FieldType, FilterField, OPERATORS } from "../reports/filterable-fields";
 
-export interface DimensionDef { key: string; label: string; expr: string; order?: string }
+export interface DimensionDef {
+  key: string; label: string; expr: string; order?: string;
+  /**
+   * The raw column reference (e.g. "f.age") when the dimension is a plain column, so a
+   * drill/records filter can be written as `f.age = value` (index-usable) instead of
+   * `COALESCE(f.age,'(none)') = value` (which forces a seq scan). Absent for computed
+   * dimensions (date buckets, json paths).
+   */
+  sourceCol?: string;
+}
 export interface MeasureDef { key: string; label: string; expr: string }
 export interface RecordFieldDef { key: string; label: string; expr: string; numeric?: boolean }
 
@@ -137,7 +146,10 @@ export class CatalogService {
       // ---- dimensions (chart X axis / Group By) ----
       if (f.is_dimension) {
         const expr = f.data_type === "json" ? `COALESCE(${ref}->>0, '(none)')` : `COALESCE(${ref}, '(none)')`;
-        catalog.dimensions[col] = { key: col, label, expr, order: orderByOptions(col, expr) };
+        // A plain (non-json) column can be filtered on the raw column (index-usable);
+        // json paths cannot, so they keep only the computed expression.
+        const sourceCol = f.data_type === "json" ? undefined : ref;
+        catalog.dimensions[col] = { key: col, label, expr, order: orderByOptions(col, expr), sourceCol };
       }
       // Date fields get month/year buckets automatically.
       if (f.data_type === "date" || f.data_type === "timestamp") {

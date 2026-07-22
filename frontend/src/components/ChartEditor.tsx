@@ -47,6 +47,8 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   const [customMeasure, setCustomMeasure] = useState<string>(
     !initialParts && initialMeasure !== "count" ? initialMeasure : "",
   );
+  // Grouping mode: roll-up of sub-group RECORD COUNTS (count/sum/avg/min/max — no field).
+  const [groupAgg, setGroupAgg] = useState<string>(existing?.spec.groupAgg ?? "count");
   const [conditions, setConditions] = useState<FilterCondition[]>(existing?.spec.conditions ?? []);
   const [logic, setLogic] = useState(existing?.spec.logic ?? "");
   const [showLegend, setShowLegend] = useState(existing?.spec.showLegend ?? true);
@@ -143,7 +145,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
       // (an empty level list is an invalid spec and the preview would 400).
       const first = schema?.dimensions[0]?.key;
       setGroupBy(first ? [first] : []);
-      setAggFn("count"); setAggField(""); setCustomMeasure("");
+      setAggFn("count"); setAggField(""); setCustomMeasure(""); setGroupAgg("count");
     } else {
       setGroupBy([]);
     }
@@ -157,16 +159,23 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
     if (chartType === "table") return "Filtered records";
     const m = labelOf("measures", measure);
     if (isClause) {
-      return groupBy.length
-        ? `Number of records grouped by ${groupBy.map((g) => labelOf("dimensions", g)).join(" / ")}`
-        : "Number of records";
+      const aggLabel = {
+        count: "Number of records", sum: "Total records",
+        avg: "Avg records per group", min: "Min records per group", max: "Max records per group",
+      }[groupAgg] ?? "Number of records";
+      if (!groupBy.length) return aggLabel;
+      const labels = groupBy.map((g) => labelOf("dimensions", g));
+      // First level shown; the rest are drill-down steps.
+      return labels.length > 1
+        ? `${aggLabel} by ${labels[0]} (drill: ${labels.slice(1).join(" › ")})`
+        : `${aggLabel} by ${labels[0]}`;
     }
     if (isCompare) return `${labelOf("dimensions", dimension)} vs ${labelOf("dimensions", compareField)}`;
     if (!needsDimension) return m;
     let c = `${m} by ${labelOf("dimensions", dimension)}`;
     if (supportsSeries && groupBy.length) c += `, split by ${groupBy.map((g) => labelOf("dimensions", g)).join(" / ")}`;
     return c;
-  }, [schema, chartType, isCompare, isClause, measure, dimension, groupBy, compareField, needsDimension, supportsSeries]);
+  }, [schema, chartType, isCompare, isClause, measure, groupAgg, dimension, groupBy, compareField, needsDimension, supportsSeries]);
 
   const isTable = chartType === "table";
   // Record columns a Table (records list) chart can show, with the user's selection applied.
@@ -190,15 +199,19 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
     series: null,
     groupBy: (isClause || (!isCompare && supportsSeries)) ? groupBy : [],
     compareField: isCompare ? compareField : null,
-    measure: isClause || isCompare ? "count" : measure, // Grouping & Compare always count records
+    // Grouping & Compare always count records; the Grouping roll-up rides in groupAgg.
+    measure: isClause || isCompare ? "count" : measure,
+    groupAgg: isClause ? groupAgg : null,
     conditions: conditions.length ? conditions : null,
     logic: logic.trim() || null,
     showLegend,
     limit: limit ? Number(limit) : null,
-    drilldown: needsDimension ? drilldown : [],
+    // Grouping mode drills through its group-by levels, so it carries no separate
+    // drill-down path.
+    drilldown: needsDimension && !isClause ? drilldown : [],
     caption,
     tableColumns: chartType === "table" ? tableColumns : null,
-  }), [viewMode, dataset, viewKey, chartType, isCompare, isClause, dimension, groupBy, compareField, measure, conditions, logic, showLegend, limit, drilldown, caption, needsDimension, supportsSeries, tableColumns]);
+  }), [viewMode, dataset, viewKey, chartType, isCompare, isClause, dimension, groupBy, compareField, measure, groupAgg, conditions, logic, showLegend, limit, drilldown, caption, needsDimension, supportsSeries, tableColumns]);
 
   // Group By options: dimensions not on the X axis or already picked at an earlier level.
   const groupByOptions = (atIndex: number) =>
@@ -258,7 +271,8 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   const TABS: { key: typeof tab; label: string }[] = [
     { key: "chart", label: "Chart" },
     { key: "options", label: "Options" },
-    ...(needsDimension ? [{ key: "drill" as const, label: "Drill-down" }] : []),
+    // Grouping mode has no separate drill-down: its group-by levels ARE the drill path.
+    ...(needsDimension && !isClause ? [{ key: "drill" as const, label: "Drill-down" }] : []),
     { key: "filters", label: "Filter" },
   ];
   const activeTab = TABS.some((t) => t.key === tab) ? tab : "chart";
@@ -322,7 +336,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
                   <div className="mode-hint">
                     {mode === "aggregate" && "One value per category — pick what to measure and what to break it down by."}
                     {mode === "compare" && "Two fields side by side — how many records fall in each combination."}
-                    {mode === "clause" && "A grouped breakdown — pick the levels to group by. No X/Y axis needed."}
+                    {mode === "clause" && "A drill-down breakdown — the chart shows the first level; clicking a bar drills into the next. Pick the levels in order."}
                   </div>
                 </>
               )}
@@ -417,6 +431,29 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
                       </button>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Grouping: how the sub-group RECORD COUNTS roll up into each bar. No
+                  field to pick — it always operates on record counts. Sits below the
+                  levels so it reads "group by … then …". */}
+              {isClause && (
+                <div className="agg-row">
+                  <label className="builder-field">
+                    Measure at each level
+                    <select value={groupAgg} onChange={(e) => setGroupAgg(e.target.value)}>
+                      <option value="count">Count of records</option>
+                      <option value="sum">Sum of records</option>
+                      <option value="avg">Average of records</option>
+                      <option value="min">Minimum of records</option>
+                      <option value="max">Maximum of records</option>
+                    </select>
+                  </label>
+                  {(groupAgg === "avg" || groupAgg === "min" || groupAgg === "max") && (
+                    <p className="muted small agg-hint">
+                      Applied to the record counts of the deepest sub-groups under each bar.
+                    </p>
+                  )}
                 </div>
               )}
 

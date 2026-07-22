@@ -273,6 +273,8 @@ export interface ChartSpec {
   groupBy?: string[] | null;
   compareField?: string | null;
   measure: string;
+  /** Grouping mode: roll-up of sub-group record counts (count/sum/avg/min/max). */
+  groupAgg?: string | null;
   conditions?: FilterCondition[] | null;
   logic?: string | null;
   filters?: Record<string, string> | null;

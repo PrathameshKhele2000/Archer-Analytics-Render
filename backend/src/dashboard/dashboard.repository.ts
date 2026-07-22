@@ -131,6 +131,32 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
     return rows;
   }
 
+  /**
+   * Re-aggregate a Grouping chart's full-breakdown matview (columns g0..gN + measure
+   * components) to one level: filter by the clicked values of the levels above it, group
+   * by this level, and recombine the measure with `reaggExpr` (from clauseMeasureParts).
+   * Reads the tiny matview, not the source table — so drilling is instant. Throws if the
+   * matview doesn't exist yet (caller falls back to a live query). widgetId/level are
+   * integers and reaggExpr is a whitelisted expression over fixed matview columns (safe
+   * to interpolate); step values are parameterized.
+   */
+  async aggregateChartMatview(
+    widgetId: number, level: number, stepValues: string[], limit: number, reaggExpr: string,
+  ): Promise<any[]> {
+    const conds = stepValues.map((_, i) => `g${i} = $${i + 1}`);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const { rows } = await this.query(
+      `SELECT g${level} AS x, ${reaggExpr} AS y
+       FROM mv_chart_${widgetId}
+       ${where}
+       GROUP BY g${level}
+       ORDER BY g${level}
+       LIMIT ${Math.min(1000, Math.max(1, limit))}`,
+      stepValues,
+    );
+    return rows;
+  }
+
   // ---- Admin config ----
 
   async listAll(): Promise<DashboardRow[]> {

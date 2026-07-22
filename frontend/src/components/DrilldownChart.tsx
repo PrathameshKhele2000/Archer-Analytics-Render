@@ -42,7 +42,11 @@ export default function DrilldownChart({
   baseRows: QueryRow[];
 }) {
   const spec = widget.config;
-  const sequence: string[] = [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean);
+  // In Grouping mode the group-by levels ARE the drill hierarchy; otherwise it's the
+  // base X dimension plus the configured drill-down path.
+  const sequence: string[] = spec.mode === "clause"
+    ? (spec.groupBy ?? []).filter(Boolean)
+    : [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean);
   const hasDrill = sequence.length > 1;
 
   const [drillEnabled, setDrillEnabled] = useState(false);

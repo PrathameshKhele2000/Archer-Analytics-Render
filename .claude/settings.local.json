@@ -250,7 +250,18 @@
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT severity, count\\(*\\) FROM ds_latest_dataset GROUP BY severity ORDER BY severity\")",
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT severity, count\\(*\\) FROM ds_latest_dataset WHERE status='Open' GROUP BY severity ORDER BY severity\")",
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT key, base_conditions, base_logic, row_limit FROM reports WHERE key='latest_dataset-register'\")",
-      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\);print\\(\"  \",{r[\"x\"]:r[\"y\"] for r in d[\"rows\"]},\"total\",sum\\(r[\"y\"] for r in d[\"rows\"]\\)\\)')"
+      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\);print\\(\"  \",{r[\"x\"]:r[\"y\"] for r in d[\"rows\"]},\"total\",sum\\(r[\"y\"] for r in d[\"rows\"]\\)\\)')",
+      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\);print\\(\"  keys:\",list\\(d[\"rows\"][0].keys\\(\\)\\)\\);print\\(\"  rows:\",d[\"rows\"][:6]\\)')",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT is_dimension FROM dataset_field f JOIN dataset d ON d.id=f.dataset_id WHERE d.key='archer-findings' AND f.key='age'\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"EXPLAIN \\(ANALYZE, TIMING OFF\\) SELECT COALESCE\\(f.cve_type,'\\(none\\)'\\) AS x, count\\(*\\) AS y FROM fact_findings f WHERE COALESCE\\(f.age,'\\(none\\)'\\) = 'Green' GROUP BY COALESCE\\(f.cve_type,'\\(none\\)'\\) LIMIT 50\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"EXPLAIN \\(ANALYZE, TIMING OFF\\) SELECT COALESCE\\(f.cve_type,'\\(none\\)'\\) AS x, count\\(*\\) AS y FROM fact_findings f WHERE f.age = 'Green' GROUP BY COALESCE\\(f.cve_type,'\\(none\\)'\\) LIMIT 50\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT indexname FROM pg_indexes WHERE tablename='fact_findings' AND \\(indexdef ILIKE '%\\(age%' OR indexdef ILIKE '%cve_type%' OR indexdef ILIKE '%priority%'\\) ORDER BY 1\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SET statement_timeout='30s'; EXPLAIN \\(ANALYZE, TIMING OFF\\) WITH k AS MATERIALIZED \\(SELECT f.record_id AS rid, f.first_found_date AS _s FROM fact_findings f WHERE f.age='Green' AND f.cve_type='Application' AND f.priority='1'\\) SELECT rid FROM k ORDER BY _s DESC LIMIT 200\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SET statement_timeout='30s'; EXPLAIN \\(ANALYZE, TIMING OFF\\) SELECT f.record_id, f.age FROM \\(SELECT * FROM fact_findings f WHERE f.age='Green' AND f.cve_type='Application' AND f.priority='1' LIMIT 200\\) f ORDER BY f.first_found_date DESC\")",
+      "Bash(python3 -c 'import sys,json;print\\([d[\"name\"] for d in json.load\\(sys.stdin\\)]\\)')",
+      "Bash(python3 -c 'import sys,json;d=json.load\\(sys.stdin\\) *)",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -Atc \"SELECT age, sum\\(days_open\\) FROM fact_findings GROUP BY age ORDER BY age\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT age, round\\(avg\\(cnt\\),1\\) AS avg_cnt, min\\(cnt\\) AS min_cnt, max\\(cnt\\) AS max_cnt, sum\\(cnt\\) AS total FROM \\(SELECT age, cve_type, count\\(*\\) AS cnt FROM fact_findings GROUP BY 1,2\\) s GROUP BY age ORDER BY age\")"
     ]
   }
 }

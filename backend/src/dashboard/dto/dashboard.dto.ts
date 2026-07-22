@@ -179,6 +179,11 @@ export class ChartSpecDto {
   @IsNotEmpty()
   measure!: string;
 
+  /** Grouping mode: roll-up of sub-group record counts (no field involved). */
+  @IsIn(["count", "sum", "avg", "min", "max"])
+  @IsOptional()
+  groupAgg?: string | null;
+
   @IsArray()
   @IsOptional()
   conditions?: any[] | null; // numbered filter conditions (validated server-side)
