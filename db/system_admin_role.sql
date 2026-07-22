@@ -9,16 +9,15 @@
 --    - Roles reach users only through GROUPS. Users are never given a role
 --      directly in the UI.
 --
---  This script performs the one-time transition off the old
---  admin/analyst/viewer seed roles. It is idempotent, but note that the
---  "delete every other role" step only runs on the FIRST run (guarded on
---  System Admin not already existing), so re-running it will never wipe out
---  roles an admin has created since.
+--  This script performs the transition off the old admin/analyst/viewer
+--  seed roles. It is fully idempotent and safe to re-run: the cleanup step
+--  removes only BUILT-IN (is_system) roles other than System Admin, and users
+--  can never create is_system roles through the app — so roles an admin has
+--  created (is_system = false) are never touched.
 -- =====================================================================
 
 DO $sysadmin$
 DECLARE
-    v_first_run  BOOLEAN := NOT EXISTS (SELECT 1 FROM roles WHERE name = 'System Admin');
     v_role_id    INT;
     v_group_id   INT;
 BEGIN
@@ -66,11 +65,11 @@ BEGIN
         ON CONFLICT DO NOTHING;
     END IF;
 
-    -- 4. First run only: drop the old seed roles. Their user_roles rows cascade,
-    --    which is the point — direct role assignment is no longer how access works.
-    IF v_first_run THEN
-        DELETE FROM roles WHERE name <> 'System Admin';
-        RAISE NOTICE 'Removed legacy roles; System Admin is now the only role.';
-    END IF;
+    -- 4. Drop the legacy seed roles. Only built-in roles other than System Admin are
+    --    removed — custom roles (is_system = false) are left alone — so this is safe
+    --    to run at any time, including after the app's own startup bootstrap has
+    --    already created System Admin. Their user_roles rows cascade, which is the
+    --    point: direct role assignment is no longer how access works.
+    DELETE FROM roles WHERE is_system AND name <> 'System Admin';
 END
 $sysadmin$;

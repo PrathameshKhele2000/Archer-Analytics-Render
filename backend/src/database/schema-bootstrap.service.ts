@@ -90,6 +90,46 @@ export class SchemaBootstrapService implements OnApplicationBootstrap {
              WHERE g.name = 'System Administrators' AND r.name = 'System Admin'
             ON CONFLICT DO NOTHING`,
     },
+    // ---- One-time transition off the old admin/analyst/viewer seed roles ----
+    // These run every boot but are no-ops once done. Order matters: current admins
+    // must be moved into the group BEFORE the legacy roles (which grant them admin)
+    // are removed, or the last administrator would be locked out.
+    {
+      name: "migrate current admins into group",
+      // Anyone who is an administrator right now (holds admin:users:manage via a
+      // directly-assigned role) becomes a member of the System Administrators group.
+      sql: `INSERT INTO user_group_member (group_id, user_id)
+            SELECT g.id, u.id
+              FROM user_group g
+              JOIN user_roles ur       ON TRUE
+              JOIN role_permissions rp ON rp.role_id = ur.role_id
+              JOIN permissions p       ON p.id = rp.permission_id
+              JOIN users u             ON u.id = ur.user_id
+             WHERE g.name = 'System Administrators' AND p.code = 'admin:users:manage'
+            ON CONFLICT DO NOTHING`,
+    },
+    {
+      name: "seed default admin into group if empty",
+      // Safety net: never leave the administrators group empty. Only fires when it is
+      // (a database seeded differently), so it never fights an admin who removed people.
+      sql: `INSERT INTO user_group_member (group_id, user_id)
+            SELECT g.id, u.id FROM user_group g, users u
+             WHERE g.name = 'System Administrators' AND u.email = 'admin@example.com'
+               AND NOT EXISTS (
+                 SELECT 1 FROM user_group_member m
+                   JOIN user_group g2 ON g2.id = m.group_id
+                  WHERE g2.name = 'System Administrators')
+            ON CONFLICT DO NOTHING`,
+    },
+    {
+      name: "remove legacy seed roles",
+      // System Admin is the only built-in role. Users can never create is_system
+      // roles through the app, so any OTHER is_system role is a legacy seed
+      // (admin/analyst/viewer). Their user_roles/*_access rows cascade — which is the
+      // whole point: direct role assignment is no longer how access works. Custom
+      // roles (is_system = false) are never touched.
+      sql: `DELETE FROM roles WHERE is_system AND name <> 'System Admin'`,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {
