@@ -17,7 +17,11 @@ function guessType(values: string[]): string {
   return "text";
 }
 
-const emptyField = (): DatasetFieldDef => ({ label: "", data_type: "text" });
+// Every field is a dimension, a measure and searchable — these are always on, so
+// they're set here rather than offered as per-field checkboxes. (The catalog only
+// builds numeric measures for numeric columns, so "measure" on text is a harmless no-op.)
+const FIELD_FLAGS = { is_dimension: true, is_measurable: true, is_searchable: true } as const;
+const emptyField = (): DatasetFieldDef => ({ label: "", data_type: "text", ...FIELD_FLAGS });
 
 const emptyDraft = (): CreateDatasetBody => ({
   name: "", description: "", sourceTable: "", keyColumn: "ContentId", watermarkColumn: "LastUpdated",
@@ -69,15 +73,9 @@ export default function DataSourcesTab() {
         headers.forEach((h, i) => (o[h] = (r[i] ?? "").trim()));
         return o;
       });
-      const fields: DatasetFieldDef[] = headers.map((h) => {
-        const type = guessType(rows.map((r) => r[h]));
-        const numeric = type === "number" || type === "integer";
-        // Default every column to a dimension so it's available on a chart's X axis /
-        // compare fields; numeric columns are also measures (Y axis). Admins can narrow
-        // this per-field in Edit.
-        return { label: h, data_type: type, is_searchable: type === "text",
-                 is_measurable: numeric, is_dimension: true };
-      });
+      const fields: DatasetFieldDef[] = headers.map((h) => ({
+        label: h, data_type: guessType(rows.map((r) => r[h])), ...FIELD_FLAGS,
+      }));
       setDraft({ ...draft, fields, sourceTable: "", watermarkColumn: "" }); // CSV dataset has no live feed
       setCsvRows(rows); setCsvName(file.name);
     } catch (e: any) {
@@ -99,15 +97,7 @@ export default function DataSourcesTab() {
       const keyCol = (draft.keyColumn || "").trim().toLowerCase();
       const fields: DatasetFieldDef[] = cols
         .filter((c) => c.name.toLowerCase() !== keyCol) // key column -> record_id (added automatically)
-        .map((c) => ({
-          label: c.name,
-          data_type: c.dataType,
-          is_searchable: c.dataType === "text",
-          is_measurable: c.dataType === "number" || c.dataType === "integer",
-          // Every column is a dimension by default (available on the chart X axis /
-          // compare fields); admins can narrow this per-field in Edit.
-          is_dimension: true,
-        }));
+        .map((c) => ({ label: c.name, data_type: c.dataType, ...FIELD_FLAGS }));
       if (!fields.length) return setErr("No columns found on that table.");
       setDraft({ ...draft, fields });
       setDiscovered(fields.length);
@@ -297,7 +287,7 @@ export default function DataSourcesTab() {
             <div className="records-table" style={{ maxHeight: 260 }}>
               <table className="findings">
                 <thead>
-                  <tr><th>Field name</th><th>Column</th><th>Type</th><th>Group by</th><th>Measure</th><th>Search</th><th></th></tr>
+                  <tr><th>Field name</th><th>Column</th><th>Type</th><th></th></tr>
                 </thead>
                 <tbody>
                   {draft.fields.map((f, i) => (
@@ -310,9 +300,6 @@ export default function DataSourcesTab() {
                           {DATA_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
                       </td>
-                      <td><input type="checkbox" checked={!!f.is_dimension} onChange={(e) => patchField(i, { is_dimension: e.target.checked })} /></td>
-                      <td><input type="checkbox" checked={!!f.is_measurable} onChange={(e) => patchField(i, { is_measurable: e.target.checked })} /></td>
-                      <td><input type="checkbox" checked={!!f.is_searchable} onChange={(e) => patchField(i, { is_searchable: e.target.checked })} /></td>
                       <td>
                         <button className="lvl-remove"
                                 onClick={() => setDraft({ ...draft, fields: draft.fields.filter((_, idx) => idx !== i) })}>✕</button>
@@ -326,7 +313,7 @@ export default function DataSourcesTab() {
               + Add field
             </button>
             <p className="muted small">
-              <b>Group by</b> = usable as a chart axis · <b>Measure</b> = can be summed/averaged · <b>Search</b> = included in global search.
+              Every field is automatically usable as a chart axis, as a measure (numeric fields), and in global search.
             </p>
 
             {sql && <pre className="sql-preview">{sql}</pre>}

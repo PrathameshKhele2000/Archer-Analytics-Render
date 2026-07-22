@@ -8,9 +8,10 @@ import { CacheService } from "../cache/cache.service";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { DATA_SOURCE_CATALOG, QUERY_BUILDER_SOURCE } from "./dashboard.entity";
 import { DashboardRepository } from "./dashboard.repository";
-import { buildAggregation, buildAggregationInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, DrillStep, schemaCatalog } from "./query-builder";
+import { buildAggregation, buildAggregationInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, DrillStep, mergeScope, schemaCatalog } from "./query-builder";
 import { Logger } from "@nestjs/common";
 import { CatalogService } from "../datasets/catalog.service";
+import { ReportsService } from "../reports/reports.service";
 import {
   AddChartWidgetDto,
   ChartSpecDto,
@@ -38,7 +39,47 @@ export class DashboardService {
     private readonly repo: DashboardRepository,
     private readonly cache: CacheService,
     private readonly catalogs: CatalogService,
+    private readonly reports: ReportsService,
   ) {}
+
+  /**
+   * Resolve a chart spec before it queries. For a Personalized Dashboard chart
+   * (spec.viewKey set), this validates the user can access that view (throws 403/404
+   * otherwise), swaps in the view's dataset, and ANDs the view's preset scope into the
+   * chart's own filter — so the chart can only ever read what the view exposes. Plain
+   * dataset charts pass through unchanged.
+   */
+  /**
+   * A chart reads EITHER a view the user can access (viewKey) or a raw dataset. Reading
+   * a raw dataset directly is only for platform admins — everyone else must go through a
+   * view, which is scoped to what they're allowed to see. This is the gate that keeps a
+   * non-admin's personal charts inside their granted views.
+   */
+  private assertChartSource(spec: ChartSpec, user?: AuthenticatedUser) {
+    if (spec.viewKey) return; // view access is enforced by resolveSpec
+    if (!user?.permissions?.includes("admin:dashboards:manage")) {
+      throw new ForbiddenException("Charts must be built on a View you can access.");
+    }
+  }
+
+  private async resolveSpec(spec: ChartSpec, user?: AuthenticatedUser): Promise<ChartSpec> {
+    if (!spec.viewKey) return spec;
+    if (!user) throw new ForbiddenException("Sign-in required to read a view-based chart.");
+    const view = await this.reports.viewScope(spec.viewKey, user);
+    const merged = mergeScope(
+      { conditions: view.baseConditions, logic: view.baseLogic },
+      { conditions: spec.conditions, logic: spec.logic },
+    );
+    return {
+      ...spec,
+      dataset: view.datasetKey,
+      conditions: merged.conditions,
+      logic: merged.logic,
+      // A "top N" view caps the chart's group limit too, so it can't surface more than
+      // the view would show.
+      limit: view.rowLimit != null ? Math.min(spec.limit ?? view.rowLimit, view.rowLimit) : spec.limit,
+    };
+  }
 
   /** The catalog a spec queries against — its dataset, or findings by default. */
   private catalogFor(spec: ChartSpec) {
@@ -58,8 +99,15 @@ export class DashboardService {
 
   /** Read a chart's data: matview → lazy-create matview → live aggregation. Never throws
    *  (a chart with an outdated/invalid spec returns [] so it can't break the dashboard). */
-  private async chartData(widget: { id: number; config: any }): Promise<any[]> {
-    const spec = widget.config as ChartSpec;
+  private async chartData(widget: { id: number; config: any }, user?: AuthenticatedUser): Promise<any[]> {
+    let spec: ChartSpec;
+    try {
+      spec = await this.resolveSpec(widget.config as ChartSpec, user);
+    } catch (e: any) {
+      // View revoked or unknown -> the chart simply shows nothing, never an error.
+      this.log.warn(`chart ${widget.id} view unavailable (returning empty): ${e?.message ?? e}`);
+      return [];
+    }
     try {
       const catalog = await this.catalogFor(spec);
       // Table = records list: run the (non-aggregated) records query live.
@@ -94,8 +142,17 @@ export class DashboardService {
 
   /** Archer-style builder catalog: X-axis fields, Y-axis measures, chart types, and the
    *  advanced filter fields + per-type operators (shared with the report filter builder). */
-  async schema(datasetKey?: string) {
-    const key = datasetKey || DEFAULT_DATASET;
+  async schema(datasetKey?: string, viewKey?: string, user?: AuthenticatedUser) {
+    // Personalized Dashboard: the builder asks for a VIEW's schema. Resolve it to the
+    // view's dataset (after checking access), so the field/measure catalog is the
+    // dataset's, but the chart will be scoped to the view at query time.
+    let view: { key: string; name: string } | undefined;
+    let key = datasetKey || DEFAULT_DATASET;
+    if (viewKey) {
+      const scope = await this.reports.viewScope(viewKey, user!);
+      key = scope.datasetKey;
+      view = { key: scope.key, name: scope.name };
+    }
     const [catalog, { fields, operators }, datasets] = await Promise.all([
       this.catalogs.forDataset(key),
       this.catalogs.fieldCatalogFor(key),
@@ -104,6 +161,7 @@ export class DashboardService {
     return {
       ...schemaCatalog(catalog),
       datasets, // so the builder can offer a dataset picker
+      view,     // set when the schema is for a view (Personalized Dashboard)
       operators,
       filterFields: fields,
     };
@@ -141,7 +199,12 @@ export class DashboardService {
   }
 
   /** Live preview: run an ad-hoc chart spec without saving it. */
-  async previewQuery(spec: ChartSpecDto) {
+  async previewQuery(specDto: ChartSpecDto, user?: AuthenticatedUser) {
+    // Only admins may preview a raw-dataset chart; everyone else must go through a view.
+    this.assertChartSource(specDto as ChartSpec, user);
+    // Resolve a view-based spec first (validates access, applies the view's scope), so
+    // the preview reflects exactly what the saved chart will show.
+    const spec = await this.resolveSpec(specDto as ChartSpec, user);
     // The chart designer re-previews on every edit, and each preview is a full
     // aggregation over the dataset (seconds on a big table). Cache by the exact spec so
     // tweaking a title, flipping chart type back and forth, or re-opening a chart is
@@ -221,8 +284,11 @@ export class DashboardService {
 
   async addChart(key: string, user: AuthenticatedUser, dto: AddChartWidgetDto) {
     const dashboard = await this.mustOwn(key, user);
-    // Validate the spec early (throws 400 on bad keys) so we never store junk.
-    await this.validateChartSpec(dto.spec as ChartSpec);
+    // A non-admin may only build charts on views they can access; admins may also use
+    // raw datasets. Resolve after: for a view chart this checks view access + scope.
+    this.assertChartSource(dto.spec as ChartSpec, user);
+    const resolved = await this.resolveSpec(dto.spec as ChartSpec, user);
+    await this.validateChartSpec(resolved);
     const existing = await this.repo.listWidgets(dashboard.id, false);
     const widget = await this.repo.addWidget(dashboard.id, {
       key: `chart_${Date.now()}`,
@@ -238,21 +304,23 @@ export class DashboardService {
     // the gateway kills it (Azure App Service cuts off at 230s), so saving a chart
     // appears to fail. The chart works immediately either way: until the matview
     // exists, chartData() falls back to a live aggregation.
-    void this.syncChartMatview(widget.id, dto.spec as ChartSpec);
+    void this.syncChartMatview(widget.id, resolved);
     await this.invalidate(key);
     return widget;
   }
 
   async updateChart(key: string, widgetId: number, user: AuthenticatedUser, dto: UpdateChartWidgetDto) {
     await this.mustOwn(key, user);
-    if (dto.spec) await this.validateChartSpec(dto.spec as ChartSpec);
+    if (dto.spec) this.assertChartSource(dto.spec as ChartSpec, user);
+    const resolved = dto.spec ? await this.resolveSpec(dto.spec as ChartSpec, user) : undefined;
+    if (resolved) await this.validateChartSpec(resolved);
     await this.repo.updateWidget(widgetId, {
       title: dto.title,
       widget_type: dto.spec?.chartType,
       config: dto.spec as unknown as Record<string, unknown> | undefined,
       sort_order: dto.sortOrder,
     });
-    if (dto.spec) void this.syncChartMatview(widgetId, dto.spec as ChartSpec); // spec changed -> rebuild in background
+    if (resolved) void this.syncChartMatview(widgetId, resolved); // spec changed -> rebuild in background
     await this.invalidate(key);
     return this.repo.listWidgets((await this.repo.findByKey(key))!.id, false);
   }
@@ -276,7 +344,7 @@ export class DashboardService {
     if (!widget || widget.data_source !== QUERY_BUILDER_SOURCE) {
       throw new NotFoundException("Chart not found");
     }
-    const spec = widget.config as unknown as ChartSpec;
+    const spec = await this.resolveSpec(widget.config as unknown as ChartSpec, user);
     const { sql, params, dimension, atLeaf } = buildDrill(spec, await this.catalogFor(spec), steps);
     const rows = dimension ? await this.repo.runAggregation(sql, params) : [];
     return { rows, dimension, atLeaf };
@@ -290,7 +358,7 @@ export class DashboardService {
     if (!widget || widget.data_source !== QUERY_BUILDER_SOURCE) {
       throw new NotFoundException("Chart not found");
     }
-    const spec = widget.config as unknown as ChartSpec;
+    const spec = await this.resolveSpec(widget.config as unknown as ChartSpec, user);
     // Each step's dimension must follow the chart's own drill sequence.
     const sequence = [spec.dimension, ...(spec.drilldown ?? [])].filter(Boolean) as string[];
     steps.forEach((step, i) => {
@@ -325,17 +393,23 @@ export class DashboardService {
     const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
     if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
 
-    const cacheKey = `dash:${key}:data`;
-    const cached = await this.cache.getJson<Record<string, any[]>>(cacheKey);
     const widgets = await this.repo.listWidgets(dashboard.id);
-    if (cached) return { dashboard, widgets, data: cached };
+    // View-based charts resolve per the viewer's own access, so their data must not be
+    // shared through the dashboard-wide cache (a viewer without access to a view would
+    // otherwise be served another user's rows). Cache only plain dashboards.
+    const hasViewChart = widgets.some((w) => (w.config as { viewKey?: string } | undefined)?.viewKey);
+    const cacheKey = `dash:${key}:data`;
+    if (!hasViewChart) {
+      const cached = await this.cache.getJson<Record<string, any[]>>(cacheKey);
+      if (cached) return { dashboard, widgets, data: cached };
+    }
 
     // Run every widget's query concurrently; user-built charts read a per-chart
     // materialized view (instant, row-count-independent) with a live fallback.
     const entries = await Promise.all(
       widgets.map(async (widget): Promise<[string, any[]]> => {
         if (widget.data_source === QUERY_BUILDER_SOURCE) {
-          return [widget.key, await this.chartData(widget)];
+          return [widget.key, await this.chartData(widget, user)];
         }
         // Legacy fixed-source widgets: tolerate a missing data source (return empty).
         try {
@@ -347,7 +421,7 @@ export class DashboardService {
       }),
     );
     const data: Record<string, any[]> = Object.fromEntries(entries);
-    await this.cache.setJson(cacheKey, data);
+    if (!hasViewChart) await this.cache.setJson(cacheKey, data);
     return { dashboard, widgets, data };
   }
 

@@ -27,7 +27,8 @@ export interface ReportRow {
 export interface ReportContext {
   table: string;                          // the dataset's table, e.g. "fact_findings"
   baseFrom: string;                       // e.g. "FROM ds_devices f"
-  searchable: Record<string, string>;     // column key -> SQL expr (cast to text)
+  searchable: Record<string, string>;     // per-column search (in-field boxes)
+  globalSearch: Record<string, string>;   // trigram-indexed subset the global search ORs across
   sortable: Record<string, string>;       // column key -> SQL expr
   filterFields: Record<string, FilterField>;
   selectCols: { key: string; expr: string }[]; // the view's columns

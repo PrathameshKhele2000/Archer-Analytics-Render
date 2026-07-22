@@ -39,15 +39,19 @@ export class DashboardController {
   /** Builder catalog: available X-axis fields, Y-axis measures, chart types, filters. */
   @Get("schema")
   @Permissions("dashboard:create")
-  schema(@Query("dataset") dataset?: string) {
-    return this.dashboards.schema(dataset);
+  schema(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("dataset") dataset?: string,
+    @Query("view") view?: string,
+  ) {
+    return this.dashboards.schema(dataset, view, user);
   }
 
   /** Live chart preview — runs an unsaved spec and returns the aggregated rows. */
   @Post("query-preview")
   @Permissions("dashboard:create")
-  preview(@Body() spec: ChartSpecDto) {
-    return this.dashboards.previewQuery(spec);
+  preview(@CurrentUser() user: AuthenticatedUser, @Body() spec: ChartSpecDto) {
+    return this.dashboards.previewQuery(spec, user);
   }
 
   @Post()

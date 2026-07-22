@@ -55,7 +55,10 @@ function whereFor(ctx: ReportContext, f: FindingsFilter): { where: string; param
     // ("bind message supplies 1 parameters, but prepared statement requires 0") — a 500
     // on every search for any dataset with no searchable columns.
     const ors: string[] = [];
-    const searchCols = Object.entries(ctx.searchable).filter(([key]) => key !== "record_id");
+    // Global search ORs only across the trigram-indexed columns — a BitmapOr of index
+    // scans instead of a seq scan (10M rows: ~3ms vs seconds). In-field search below
+    // still uses the full `searchable` set, one column at a time.
+    const searchCols = Object.entries(ctx.globalSearch).filter(([key]) => key !== "record_id");
     if (searchCols.length) {
       params.push(`%${term}%`);
       const p = `$${params.length}`;
@@ -217,11 +220,43 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
     return { total: Math.min(n, CAP), capped: n > CAP };
   }
 
-  /** One page of rows (index-served, fast regardless of table size). */
-  async pageFindings(ctx: ReportContext, q: FindingsQuery): Promise<any[]> {
+  /** True when this query carries a global or per-column search term. */
+  private hasSearch(q: FindingsFilter): boolean {
+    return !!(q.search ?? "").trim() || Object.values(q.colFilters ?? {}).some((v) => (v ?? "").trim());
+  }
+
+  /**
+   * One page of rows (index-served, fast regardless of table size).
+   *
+   * `searchSelective` (set by the caller once the count is known) fixes a planner trap:
+   * a search whose predicate matches few rows, combined with ORDER BY on an indexed
+   * column + LIMIT, tempts Postgres into scanning that index in order and filtering
+   * each row — which never fills the LIMIT and scans the whole 10M table. When we know
+   * the match set is small, we force filter-first with a MATERIALIZED CTE (BitmapOr →
+   * sort the few narrow rows → join back). Broad searches keep the plain index-order
+   * scan, which finds the page near the top instantly.
+   */
+  async pageFindings(ctx: ReportContext, q: FindingsQuery, searchSelective?: boolean): Promise<any[]> {
     const { where, params } = whereFor(ctx, q);
     const sortCol = ctx.sortable[q.sort ?? ""] ?? ctx.defaultSortExpr;
     const direction = (q.order ?? "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
+
+    if (where && searchSelective && this.hasSearch(q)) {
+      const dir = direction;
+      const offset = (q.page - 1) * q.size;
+      const { rows } = await this.query(
+        `WITH k AS MATERIALIZED (
+           SELECT f.record_id AS rid, ${sortCol} AS _s ${ctx.baseFrom} ${where}
+         )
+         SELECT ${this.selectList(ctx)}
+         FROM ${ctx.table} f
+         JOIN (SELECT rid FROM k ORDER BY _s ${dir}, rid ${dir} LIMIT ${q.size} OFFSET ${offset}) kk
+           ON kk.rid = f.record_id
+         ORDER BY ${sortCol} ${dir}, f.record_id ${dir}`,
+        params,
+      );
+      return rows;
+    }
     // Order the tie-breaker in the SAME direction as the sort column and use Postgres'
     // default NULL placement. That lets a single plain (col, record_id) index serve both
     // directions via a forward / backward Index Only Scan. Forcing "NULLS LAST" or a

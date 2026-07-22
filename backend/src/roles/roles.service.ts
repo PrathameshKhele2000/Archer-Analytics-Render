@@ -13,7 +13,7 @@ export const SYSTEM_ADMIN_ROLE = "System Admin";
  * Control. Without this baseline a new role would be granted views it then couldn't
  * open, which reads as "access control is broken".
  */
-const NEW_ROLE_PERMISSIONS = ["dashboard:read", "report:read", "report:export"];
+const NEW_ROLE_PERMISSIONS = ["dashboard:read", "dashboard:create", "report:read", "report:export"];
 
 @Injectable()
 export class RolesService {

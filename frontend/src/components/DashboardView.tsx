@@ -19,7 +19,7 @@ function LegacyChart({ type, rows }: { type: string; rows: any[] }) {
 const fmtKpi = (v: unknown) =>
   v == null ? "—" : typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(v);
 
-export default function DashboardView({ dashboardKey, canEdit }: { dashboardKey: string; canEdit?: boolean }) {
+export default function DashboardView({ dashboardKey, canEdit, viewSources }: { dashboardKey: string; canEdit?: boolean; viewSources?: { key: string; name: string }[] }) {
   const [payload, setPayload] = useState<DashboardWithData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<null | { widgetId: number; title: string; spec: ChartSpec }>(null);
@@ -53,6 +53,7 @@ export default function DashboardView({ dashboardKey, canEdit }: { dashboardKey:
       <ChartEditor
         dashboardKey={dashboardKey}
         existing={editing ?? undefined}
+        viewSources={viewSources}
         onSaved={() => { setAdding(false); setEditing(null); load(); }}
         onCancel={() => { setAdding(false); setEditing(null); }}
       />

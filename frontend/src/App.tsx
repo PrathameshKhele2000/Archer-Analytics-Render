@@ -10,11 +10,12 @@ const ArchitecturePage = lazy(() => import("./components/ArchitecturePage"));
 const DashboardBuilder = lazy(() => import("./components/DashboardBuilder"));
 const DashboardView = lazy(() => import("./components/DashboardView"));
 const DataSetsTab = lazy(() => import("./components/DataSetsTab"));
+const PersonalizedDashboard = lazy(() => import("./components/PersonalizedDashboard"));
 const ReportView = lazy(() => import("./components/ReportView"));
 
 const Loading = () => <div className="loading">loading…</div>;
 
-type Section = "dashboard" | "datasets" | "reports" | "admin";
+type Section = "dashboard" | "personal" | "datasets" | "reports" | "admin";
 
 export default function App() {
   const [user, setUser] = useState<SafeUser | null>(null);
@@ -71,12 +72,19 @@ export default function App() {
   const canAdmin = ["admin:users:manage", "admin:roles:manage", "sync:read", "audit:read"].some((p) =>
     hasPermission(user, p),
   );
-  const canCreateDashboards = hasPermission(user, "dashboard:create");
+  // System Admin already has the full Dashboards tab over every dataset; the
+  // Personalized Dashboard (charts built on the user's accessible Views) is for
+  // everyone else who can build dashboards.
+  const isSystemAdmin = user.roles.includes("System Admin");
+  const canPersonalize = !isSystemAdmin && hasPermission(user, "dashboard:create") && hasPermission(user, "report:read");
+  // The main Dashboards tab builds charts on raw DATASETS, which only System Admin may
+  // do. Everyone else builds on their accessible Views in the Personalized Dashboard
+  // tab, so the dataset builder here is admin-only.
+  const canManageDashboards = hasPermission(user, "admin:dashboards:manage");
+  const canCreateDashboards = canManageDashboards;
   const currentDashboard = dashboards.find((d) => d.key === activeDashboard);
   const ownsCurrent = !!currentDashboard && currentDashboard.owner_user_id === user.id;
-  // Admins can add/edit charts on any dashboard (incl. the shared system overview);
-  // the backend already allows this via admin:dashboards:manage.
-  const canEditCurrent = ownsCurrent || hasPermission(user, "admin:dashboards:manage");
+  const canEditCurrent = canManageDashboards;
 
   const logout = () => {
     tokenStore.clear();
@@ -100,7 +108,12 @@ export default function App() {
               Dashboards
             </button>
           )}
-          {hasPermission(user, "report:read") && (
+          {canPersonalize && (
+            <button className={section === "personal" ? "active" : ""} onClick={() => setSection("personal")}>
+              Personalized Dashboard
+            </button>
+          )}
+          {isSystemAdmin && (
             <button className={section === "datasets" ? "active" : ""} onClick={() => setSection("datasets")}>
               DataSets
             </button>
@@ -115,7 +128,9 @@ export default function App() {
               Admin Panel
             </button>
           )}
-          <button onClick={() => setShowArch(true)}>Architecture</button>
+          {/* Raw dataset browsing and the architecture page are for System Admin only;
+              other users work through their Views and Personalized Dashboard. */}
+          {isSystemAdmin && <button onClick={() => setShowArch(true)}>Architecture</button>}
         </nav>
         <div className="sync">
           <span>{user.full_name} · {user.roles.join(", ")}</span>
@@ -158,7 +173,9 @@ export default function App() {
         )
       )}
 
-      {section === "datasets" && <DataSetsTab />}
+      {section === "personal" && canPersonalize && <PersonalizedDashboard user={user} />}
+
+      {section === "datasets" && isSystemAdmin && <DataSetsTab />}
 
       {section === "reports" && (
         <>

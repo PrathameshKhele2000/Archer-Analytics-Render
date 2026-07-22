@@ -145,6 +145,11 @@ export class ChartSpecDto {
   @IsOptional()
   dataset?: string | null;
 
+  /** Personalized Dashboard: read through this view (resolved to its dataset + scope). */
+  @IsString()
+  @IsOptional()
+  viewKey?: string | null;
+
   @IsString()
   @IsNotEmpty()
   chartType!: string;

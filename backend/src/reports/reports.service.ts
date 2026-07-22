@@ -42,6 +42,24 @@ export class ReportsService implements OnApplicationBootstrap {
     return this.repo.listAccessible(user.id, user.roles);
   }
 
+  /**
+   * A view's dataset + preset scope, for building a chart on top of it (Personalized
+   * Dashboards). Throws 403/404 if the user can't access the view — so a chart can
+   * never read a view its owner isn't allowed to see. row_limit is also returned so a
+   * view that shows "top N" caps the chart's data too.
+   */
+  async viewScope(key: string, user: AuthenticatedUser) {
+    const report = await this.mustBeAccessible(key, user);
+    return {
+      key: report.key,
+      name: report.name,
+      datasetKey: report.dataset_key || DEFAULT_DATASET,
+      baseConditions: report.base_conditions ?? [],
+      baseLogic: report.base_logic ?? null,
+      rowLimit: report.row_limit ?? null,
+    };
+  }
+
   async getConfig(key: string, user: AuthenticatedUser) {
     const report = await this.mustBeAccessible(key, user);
     const [columns, filters] = await Promise.all([
@@ -91,6 +109,7 @@ export class ReportsService implements OnApplicationBootstrap {
       table: catalog.table,
       baseFrom: catalog.baseFrom,
       searchable: catalog.searchable,
+      globalSearch: catalog.globalSearch,
       sortable: catalog.sortable,
       filterFields: catalog.filterFields,
       selectCols: keys.map((k) => ({ key: k, expr: catalog.recordFields[k].expr })),
@@ -120,18 +139,30 @@ export class ReportsService implements OnApplicationBootstrap {
     if (cached) return cached;
 
     const countKey = `report:${key}:count:${JSON.stringify({ c: q.conditions ?? [], l: q.logic ?? null, s: q.search ?? "", cf: q.colFilters ?? {}, bc: q.baseConditions ?? [], bl: q.baseLogic ?? null })}`;
-    // Run count + page together via Promise.all so a rejection in either (e.g. a bad
-    // filter field -> 400) is handled — never a leaked unhandled rejection that crashes.
-    const [count, rows] = await Promise.all([
-      (async () => {
-        const cachedCount = await this.cache.getJson<{ total: number; capped: boolean; estimated?: boolean }>(countKey);
-        if (cachedCount != null) return cachedCount;
-        const t = await this.repo.countFindings(ctx, q);
-        await this.cache.setJson(countKey, t, 1800); // 30 min; invalidated on sync
-        return t;
-      })(),
-      pageQuery.size > 0 ? this.repo.pageFindings(ctx, pageQuery) : Promise.resolve([]),
-    ]);
+    const getCount = async () => {
+      const cachedCount = await this.cache.getJson<{ total: number; capped: boolean; estimated?: boolean }>(countKey);
+      if (cachedCount != null) return cachedCount;
+      const t = await this.repo.countFindings(ctx, q);
+      await this.cache.setJson(countKey, t, 1800); // 30 min; invalidated on sync
+      return t;
+    };
+
+    // For a search, the count (always fast — bounded at 10k) tells us whether the match
+    // set is small: if so the page must filter-before-sort to avoid a planner trap, so
+    // we compute count first and pass that hint. Without a search, count and page are
+    // independent and run in parallel.
+    const searching = !!(q.search ?? "").trim() || Object.values(q.colFilters ?? {}).some((v) => (v ?? "").trim());
+    let count: { total: number; capped: boolean; estimated?: boolean };
+    let rows: any[];
+    if (searching) {
+      count = await getCount();
+      rows = pageQuery.size > 0 ? await this.repo.pageFindings(ctx, pageQuery, !count.capped) : [];
+    } else {
+      [count, rows] = await Promise.all([
+        getCount(),
+        pageQuery.size > 0 ? this.repo.pageFindings(ctx, pageQuery) : Promise.resolve([]),
+      ]);
+    }
     // A "top N" view never has more than N rows, so report N as the total — otherwise
     // the pager would offer pages the view will never serve.
     const limited = rowLimit && rowLimit > 0 && count.total > rowLimit;
@@ -238,7 +269,8 @@ export class ReportsService implements OnApplicationBootstrap {
     const catalog = await this.catalogs.forDataset(datasetKey);
     const ctx: ReportContext = {
       table: catalog.table,
-      baseFrom: catalog.baseFrom, searchable: catalog.searchable, sortable: catalog.sortable,
+      baseFrom: catalog.baseFrom, searchable: catalog.searchable, globalSearch: catalog.globalSearch,
+      sortable: catalog.sortable,
       filterFields: catalog.filterFields, selectCols: [], defaultSortExpr: "f.record_id",
     };
     const { total, capped } = await this.repo.countFindings(ctx, {

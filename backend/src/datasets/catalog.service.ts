@@ -20,7 +20,15 @@ export interface Catalog {
   defaultRecordCols: string[];
   /** Field a records list sorts by (newest-first); null -> record_id. */
   defaultSort: string | null;
+  /** Per-column search expressions (used by the in-field search boxes). */
   searchable: Record<string, string>;
+  /**
+   * Columns the GLOBAL quick-search may OR across. This is the subset of `searchable`
+   * that is backed by a trigram index, so the whole OR can be served by a BitmapOr of
+   * index scans. Including a non-indexed column would force a full seq scan of the
+   * whole OR, so global search must never reach outside this set on a large table.
+   */
+  globalSearch: Record<string, string>;
   sortable: Record<string, string>;
 }
 
@@ -94,7 +102,7 @@ export class CatalogService {
       baseFrom: `FROM ${table} f`,
       dimensions: {}, measures: {}, recordFields: {}, filterFields: {},
       defaultRecordCols: [], defaultSort: ds.default_sort_field ? ident(ds.default_sort_field) : null,
-      searchable: {}, sortable: {},
+      searchable: {}, globalSearch: {}, sortable: {},
     };
 
     const orderByOptions = (fieldKey: string, expr: string): string | undefined => {
@@ -175,6 +183,22 @@ export class CatalogService {
       }
     }
 
+    // Global quick-search may only OR across columns backed by a trigram index —
+    // otherwise one non-indexed column turns the whole OR into a 10M-row seq scan.
+    // In-field search keeps the full `searchable` set (one column at a time).
+    const indexed = await this.trigramColumns(table);
+    for (const [col, expr] of Object.entries(catalog.searchable)) {
+      if (col !== "record_id" && indexed.has(col)) catalog.globalSearch[col] = expr;
+    }
+    // Small / unindexed datasets have no trigram indexes at all; there a seq scan is
+    // cheap, and dropping global search entirely would be worse than a slow one — so
+    // fall back to the full searchable set to preserve "search actually searches".
+    if (!Object.keys(catalog.globalSearch).length) {
+      for (const [col, expr] of Object.entries(catalog.searchable)) {
+        if (col !== "record_id") catalog.globalSearch[col] = expr;
+      }
+    }
+
     // count(*) is always available.
     catalog.measures.count = { key: "count", label: "Number of records", expr: "count(*)" };
 
@@ -194,6 +218,31 @@ export class CatalogService {
 
     this.cache.set(key, catalog);
     return catalog;
+  }
+
+  /**
+   * Column names on `table` that carry a single-column gin_trgm_ops index — i.e. the
+   * ones an `ILIKE '%term%'` can be served from by index. Best-effort: on any error
+   * (permissions, odd catalog) it returns empty, and global search falls back to the
+   * full searchable set.
+   */
+  private async trigramColumns(table: string): Promise<Set<string>> {
+    try {
+      const { rows } = await this.db.query<{ col: string }>(
+        `SELECT a.attname AS col
+           FROM pg_index ix
+           JOIN pg_class t   ON t.oid = ix.indrelid
+           JOIN pg_class i   ON i.oid = ix.indexrelid
+           JOIN pg_am    am  ON am.oid = i.relam
+           JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ix.indkey[0]
+           JOIN pg_opclass opc ON opc.oid = ix.indclass[0]
+          WHERE t.relname = $1 AND am.amname = 'gin' AND opc.opcname = 'gin_trgm_ops'`,
+        [table],
+      );
+      return new Set(rows.map((r) => r.col));
+    } catch {
+      return new Set();
+    }
   }
 
   private filterTypeFor(dataType: string): FieldType {

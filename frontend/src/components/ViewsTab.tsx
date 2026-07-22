@@ -20,7 +20,6 @@ interface Draft {
   rowMode: "all" | "top";
   rowLimit: string; // kept as text so the input can be empty while being typed
   columns: string[];
-  roleIds: number[];
 }
 
 /**
@@ -51,10 +50,13 @@ export default function ViewsTab() {
   useEffect(() => {
     if (!draft) return;
     setSchema(null);
-    api.admin.views.datasetSchema(draft.datasetKey).then(setSchema).catch((e) => setErr(String(e.message ?? e)));
+    api.admin.views.datasetSchema(draft.datasetKey).then((s) => {
+      setSchema(s);
+      // Default to EVERY column selected when none are chosen yet (creating a view, or
+      // after switching dataset). Editing an existing view keeps its saved columns.
+      setDraft((d) => (d && d.columns.length ? d : d && { ...d, columns: s.recordColumns.map((c) => c.key) }));
+    }).catch((e) => setErr(String(e.message ?? e)));
   }, [draft?.datasetKey]);
-
-  const defaultCols = (s: DatasetSchema | null) => (s?.recordColumns ?? []).slice(0, 8).map((c) => c.key);
 
   // Live "this view matches N records" while the admin builds the rule (per dataset).
   const scopeKey = useMemo(
@@ -76,7 +78,7 @@ export default function ViewsTab() {
     setDraft({
       datasetKey: datasets[0]?.key ?? "archer-findings",
       name: "", description: "", conditions: [], logic: "",
-      rowMode: "all", rowLimit: "", columns: [], roleIds: [],
+      rowMode: "all", rowLimit: "", columns: [],
     });
   };
   const openEdit = (v: RecordView) => {
@@ -87,7 +89,7 @@ export default function ViewsTab() {
       conditions: v.base_conditions ?? [], logic: v.base_logic ?? "",
       rowMode: v.row_limit ? "top" : "all",
       rowLimit: v.row_limit ? String(v.row_limit) : "",
-      columns: v.columns ?? [], roleIds: v.role_ids ?? [],
+      columns: v.columns ?? [],
     });
   };
 
@@ -98,7 +100,7 @@ export default function ViewsTab() {
   const save = async () => {
     if (!draft) return;
     if (!draft.name.trim()) return setErr("Give the view a name.");
-    const cols = draft.columns.length ? draft.columns : defaultCols(schema);
+    const cols = draft.columns;
     if (!cols.length) return setErr("Pick at least one column.");
     const rowLimit = draft.rowMode === "top" ? Number(draft.rowLimit) : null;
     if (rowLimit !== null && (!Number.isInteger(rowLimit) || rowLimit < 1)) {
@@ -114,7 +116,8 @@ export default function ViewsTab() {
       baseLogic: draft.logic.trim() || null,
       rowLimit,
       columns: cols.map((k) => ({ key: k, label: byKey.get(k) ?? k })),
-      roleIds: draft.roleIds,
+      // Access is managed from Access Control (role → views), not here — so we never
+      // send roleIds. Omitting it leaves any grants set there untouched.
     };
     try {
       if (draft.id) await api.admin.views.update(draft.id, body);
@@ -134,15 +137,10 @@ export default function ViewsTab() {
 
   const toggleCol = (key: string) =>
     setDraft((d) => d && ({ ...d, columns: d.columns.includes(key) ? d.columns.filter((k) => k !== key) : [...d.columns, key] }));
-  const toggleRole = (id: number) =>
-    setDraft((d) => d && ({ ...d, roleIds: d.roleIds.includes(id) ? d.roleIds.filter((r) => r !== id) : [...d.roleIds, id] }));
 
   const roleNames = (ids: number[]) =>
     ids.map((id) => roles.find((r) => r.id === id)?.name).filter(Boolean).join(", ") || "— nobody yet —";
   const datasetName = (key: string) => datasets.find((d) => d.key === key)?.name ?? key;
-
-  // Which columns the picker shows are "on" — default set until the admin customizes.
-  const shownCols = draft && (draft.columns.length ? draft.columns : defaultCols(schema));
 
   return (
     <div className="views-tab">
@@ -155,7 +153,7 @@ export default function ViewsTab() {
 
       <p className="muted small">
         A view is a <b>saved filter on one dataset</b>, so it refreshes itself on every sync and a record appears
-        in every view it matches. Choose the dataset, the rows, the columns, and who can see it.
+        in every view it matches. Choose the dataset, the rows, and the columns; grant access to it in Access Control.
       </p>
 
       {err && !draft && <div className="login-error">{err}</div>}
@@ -255,23 +253,19 @@ export default function ViewsTab() {
               )}
             </p>
 
-            <div className="field-label">Columns to show</div>
+            <div className="field-label">
+              Columns to show <span className="muted">({draft.columns.length} of {schema?.recordColumns.length ?? 0})</span>
+            </div>
             <MultiCheckDropdown
               label="Select columns"
               options={(schema?.recordColumns ?? []).map((c) => ({ key: c.key, label: c.label }))}
-              selected={(k) => !!shownCols?.includes(k)}
+              selected={(k) => draft.columns.includes(k)}
               onToggle={toggleCol}
             />
-
-            <div className="field-label">Visible to roles</div>
-            <div className="col-picker">
-              {roles.map((r) => (
-                <label className="chk" key={r.id}>
-                  <input type="checkbox" checked={draft.roleIds.includes(r.id)} onChange={() => toggleRole(r.id)} />
-                  {r.name}
-                </label>
-              ))}
-            </div>
+            <p className="muted small">
+              All columns are selected by default — untick any you don't want in this view. Who can see the view is
+              set in <b>Access Control → Roles</b> (grant a role access to it, then put people in a group that holds the role).
+            </p>
 
             {err && <div className="login-error">{err}</div>}
             <div className="builder-actions">

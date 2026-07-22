@@ -264,6 +264,8 @@ export type RecordRow = Record<string, string | number | null>;
 export interface ChartSpec {
   /** Which dataset the chart reads; omitted = the findings dataset. */
   dataset?: string | null;
+  /** Personalized Dashboard: read through this view (server resolves dataset + scope). */
+  viewKey?: string | null;
   chartType: string;
   mode?: "aggregate" | "compare" | "clause";
   dimension?: string | null;
@@ -383,8 +385,11 @@ export const api = {
   dashboards: {
     list: () => get<DashboardMeta[]>("/api/dashboards"),
     get: (key: string) => get<DashboardWithData>(`/api/dashboards/${key}`),
-    schema: (dataset?: string) =>
-      get<DashboardSchema>(`/api/dashboards/schema${dataset ? `?dataset=${encodeURIComponent(dataset)}` : ""}`),
+    schema: (source?: string | { view: string }) => {
+      const qs = typeof source === "string" ? (source ? `?dataset=${encodeURIComponent(source)}` : "")
+        : source ? `?view=${encodeURIComponent(source.view)}` : "";
+      return get<DashboardSchema>(`/api/dashboards/schema${qs}`);
+    },
     preview: (spec: ChartSpec) =>
       post<{
         rows: any[];

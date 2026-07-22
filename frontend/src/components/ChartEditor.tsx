@@ -11,6 +11,11 @@ interface Props {
   existing?: { widgetId: number; title: string; spec: ChartSpec };
   onSaved: () => void;
   onCancel: () => void;
+  /**
+   * Personalized Dashboard: when provided, the data source is one of these VIEWS
+   * (not a raw dataset). The chart reads through the chosen view and is scoped to it.
+   */
+  viewSources?: { key: string; name: string }[];
 }
 
 const CHART_ICON: Record<string, string> = {
@@ -18,10 +23,12 @@ const CHART_ICON: Record<string, string> = {
 };
 
 /** Archer-style chart designer: pick a type, then X-axis field, Y-axis value, split-by, filters — with live preview. */
-export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel }: Props) {
+export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel, viewSources }: Props) {
+  const viewMode = !!viewSources; // Personalized Dashboard: data source is a View
   const [schema, setSchema] = useState<DashboardSchema | null>(null);
   const [title, setTitle] = useState(existing?.title ?? "");
   const [dataset, setDataset] = useState(existing?.spec.dataset || "archer-findings");
+  const [viewKey, setViewKey] = useState(existing?.spec.viewKey || viewSources?.[0]?.key || "");
   const [chartType, setChartType] = useState(existing?.spec.chartType ?? "column");
   const [mode, setMode] = useState<"aggregate" | "compare" | "clause">(existing?.spec.mode ?? "aggregate");
   const [dimension, setDimension] = useState(existing?.spec.dimension ?? "");
@@ -79,23 +86,32 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
   const [tab, setTab] = useState<"chart" | "options" | "drill" | "filters">("chart");
 
   useEffect(() => {
-    api.dashboards.schema(dataset).then((s) => {
+    // View mode loads the chosen view's schema (its dataset's fields, scoped by the
+    // view); dataset mode loads the dataset's schema directly.
+    if (viewMode && !viewKey) return;
+    const load = viewMode ? api.dashboards.schema({ view: viewKey }) : api.dashboards.schema(dataset);
+    load.then((s) => {
       setSchema(s);
-      if (!existing) {
-        setDimension((d) => d || s.dimensions[0]?.key || "");
-
-      }
+      if (!existing) setDimension((d) => d || s.dimensions[0]?.key || "");
     }).catch(console.error);
-  }, [existing, dataset]);
+  }, [existing, dataset, viewKey, viewMode]);
 
-  /** Switching dataset invalidates every field choice — its fields are different. */
-  const changeDataset = (key: string) => {
-    if (key === dataset) return;
-    setDataset(key);
+  /** Switching data source invalidates every field choice — its fields are different. */
+  const resetForNewSource = () => {
     setSchema(null);
     setDimension(""); setGroupBy([]); setCompareField(""); setAggFn("count"); setAggField(""); setCustomMeasure("");
     setConditions([]); setLogic(""); setDrilldown([]); setTableColumns(null);
     setResult({ rows: [], approximate: false }); setError(null);
+  };
+  const changeDataset = (key: string) => {
+    if (key === dataset) return;
+    setDataset(key);
+    resetForNewSource();
+  };
+  const changeView = (key: string) => {
+    if (key === viewKey) return;
+    setViewKey(key);
+    resetForNewSource();
   };
 
   /** The dataset's record columns (drives the table-chart column picker). */
@@ -164,7 +180,10 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
   };
 
   const spec: ChartSpec = useMemo(() => ({
-    dataset,
+    // View mode: send viewKey (the server resolves the dataset + scope). Dataset mode:
+    // send dataset. Never both.
+    dataset: viewMode ? null : dataset,
+    viewKey: viewMode ? viewKey : null,
     chartType,
     mode: isClause ? "clause" : isCompare ? "compare" : "aggregate",
     dimension: isClause ? null : needsDimension ? dimension : null,
@@ -179,7 +198,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
     drilldown: needsDimension ? drilldown : [],
     caption,
     tableColumns: chartType === "table" ? tableColumns : null,
-  }), [dataset, chartType, isCompare, isClause, dimension, groupBy, compareField, measure, conditions, logic, showLegend, limit, drilldown, caption, needsDimension, supportsSeries, tableColumns]);
+  }), [viewMode, dataset, viewKey, chartType, isCompare, isClause, dimension, groupBy, compareField, measure, conditions, logic, showLegend, limit, drilldown, caption, needsDimension, supportsSeries, tableColumns]);
 
   // Group By options: dimensions not on the X axis or already picked at an earlier level.
   const groupByOptions = (atIndex: number) =>
@@ -252,7 +271,14 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel 
             Chart title
             <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Open findings by BU" />
           </label>
-          {schema.datasets.length > 1 && (
+          {viewMode ? (
+            <label className="builder-field">
+              Data source (View)
+              <select value={viewKey} onChange={(e) => changeView(e.target.value)}>
+                {viewSources!.map((v) => <option key={v.key} value={v.key}>{v.name}</option>)}
+              </select>
+            </label>
+          ) : schema.datasets.length > 1 && (
             <label className="builder-field">
               Data source
               <select value={dataset} onChange={(e) => changeDataset(e.target.value)}>

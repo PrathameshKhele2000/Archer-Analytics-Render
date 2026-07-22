@@ -115,6 +115,7 @@ export class DatasetBrowseService {
       table: catalog.table,
       baseFrom: catalog.baseFrom,
       searchable: catalog.searchable,
+      globalSearch: catalog.globalSearch,
       sortable: catalog.sortable,
       filterFields: catalog.filterFields,
       selectCols: keys.map((k) => ({ key: k, expr: catalog.recordFields[k].expr })),
@@ -156,16 +157,25 @@ export class DatasetBrowseService {
     const countKey = `report:dsbrowse:${key}:count:${JSON.stringify({
       c: q.conditions ?? [], l: q.logic ?? null, s: q.search ?? "", cf: q.colFilters ?? {},
     })}`;
-    const [count, rows] = await Promise.all([
-      (async () => {
-        const hit = await this.cache.getJson<{ total: number; capped: boolean; estimated?: boolean }>(countKey);
-        if (hit != null) return hit;
-        const t = await this.repo.countFindings(ctx, q);
-        await this.cache.setJson(countKey, t, 1800);
-        return t;
-      })(),
-      this.repo.pageFindings(ctx, q),
-    ]);
+    const getCount = async () => {
+      const hit = await this.cache.getJson<{ total: number; capped: boolean; estimated?: boolean }>(countKey);
+      if (hit != null) return hit;
+      const t = await this.repo.countFindings(ctx, q);
+      await this.cache.setJson(countKey, t, 1800);
+      return t;
+    };
+
+    // A search needs the count first, so the page can filter-before-sort when the match
+    // set is small (avoids a planner trap that seq-scans the whole table). See pageFindings.
+    const searching = !!(q.search ?? "").trim() || Object.values(q.colFilters ?? {}).some((v) => (v ?? "").trim());
+    let count: { total: number; capped: boolean; estimated?: boolean };
+    let rows: any[];
+    if (searching) {
+      count = await getCount();
+      rows = await this.repo.pageFindings(ctx, q, !count.capped);
+    } else {
+      [count, rows] = await Promise.all([getCount(), this.repo.pageFindings(ctx, q)]);
+    }
 
     const result = {
       total: count.total,

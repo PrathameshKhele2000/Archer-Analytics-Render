@@ -53,6 +53,12 @@ const MAX_LIMIT = 1000;
 export interface ChartSpec {
   /** Which dataset this chart reads (defaults to the findings dataset). */
   dataset?: string | null;
+  /**
+   * Personalized dashboards: read through a VIEW the user can access instead of a raw
+   * dataset. The server resolves this to the view's dataset and ANDs the view's preset
+   * scope into every query, so the chart can only ever see what the view exposes.
+   */
+  viewKey?: string | null;
   chartType: string;
   // aggregate = Calculate Values | compare = Compare Fields | clause = Group & Count
   mode?: "aggregate" | "compare" | "clause";
@@ -70,6 +76,32 @@ export interface ChartSpec {
   drilldown?: string[] | null; // ordered dimensions to descend into on click
   caption?: string | null; // presentation only ("what vs what")
   tableColumns?: string[] | null; // presentation only: which columns a table chart shows
+}
+
+/**
+ * Combine a view's preset scope (base) with a chart's own filter (chart) into one
+ * numbered-condition set + logic string, ANDing the two. The chart's condition numbers
+ * are shifted past the base's so a custom logic expression on either side stays valid.
+ * Mirrors how reports AND a view's base scope with the user's filter.
+ */
+export function mergeScope(
+  base: { conditions?: FilterCondition[] | null; logic?: string | null },
+  chart: { conditions?: FilterCondition[] | null; logic?: string | null },
+): { conditions: FilterCondition[]; logic: string | null } {
+  const bc = base.conditions ?? [];
+  const cc = chart.conditions ?? [];
+  if (!bc.length) return { conditions: cc, logic: chart.logic ?? null };
+  if (!cc.length) return { conditions: bc, logic: base.logic ?? null };
+  const clause = (logic: string | null | undefined, count: number, offset: number) => {
+    const body = logic && logic.trim()
+      ? logic.replace(/\d+/g, (m) => String(Number(m) + offset))
+      : Array.from({ length: count }, (_, i) => i + 1 + offset).join(" AND ");
+    return `(${body})`;
+  };
+  return {
+    conditions: [...bc, ...cc],
+    logic: `${clause(base.logic, bc.length, 0)} AND ${clause(chart.logic, cc.length, bc.length)}`,
+  };
 }
 
 /** The Group By dimensions for a chart (new multilevel array, or the legacy single series). */
