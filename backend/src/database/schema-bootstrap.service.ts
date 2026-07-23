@@ -39,6 +39,18 @@ export class SchemaBootstrapService implements OnApplicationBootstrap {
                               ADD COLUMN IF NOT EXISTS sbu TEXT`,
     },
     {
+      // What a chart's breakdown matview holds. Recorded at build time because the
+      // alternative — probing the matview on every read to see if it was cut off —
+      // means walking millions of rows on each chart load and drill click.
+      name: "chart_matview_state",
+      sql: `CREATE TABLE IF NOT EXISTS chart_matview_state (
+              widget_id  INT PRIMARY KEY,
+              truncated  BOOLEAN NOT NULL DEFAULT FALSE,
+              row_count  BIGINT,
+              built_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            )`,
+    },
+    {
       name: "user_group",
       sql: `CREATE TABLE IF NOT EXISTS user_group (
               id          SERIAL PRIMARY KEY,

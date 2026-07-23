@@ -145,6 +145,28 @@ function buildClause(
     return n;
   };
 
+  /**
+   * An operator reads exactly one operand shape: `value` (arity 1), `value` + `value2`
+   * (2), `values[]` (-1), or nothing (0). A condition that carries its operand in a
+   * DIFFERENT slot used to fall through to "no value supplied" and be dropped — the
+   * filter then vanished and the query returned everything, with no error.
+   *
+   * That is only ever a caller mistake, so it is now rejected. A condition whose own
+   * slot is simply still empty is a different thing — a half-typed row in the builder —
+   * and is skipped as before, so the live preview keeps working while you type.
+   */
+  const hasText = (v?: string) => v !== undefined && v !== "";
+  const stray: string[] = [];
+  if (op.arity !== -1 && (cond.values?.length ?? 0) > 0) stray.push("values");
+  if (op.arity !== 2 && hasText(cond.value2)) stray.push("value2");
+  if (op.arity !== 1 && op.arity !== 2 && hasText(cond.value)) stray.push("value");
+  if (stray.length) {
+    throw new BadRequestException(
+      `Operator '${op.op}' on '${field.key}' does not take ${stray.join("/")}` +
+      `${op.arity === -1 ? " — use values[]" : op.arity === 0 ? " — it takes no value" : " — use value"}`,
+    );
+  }
+
   // Operators that need no value.
   switch (op.op) {
     case "empty":

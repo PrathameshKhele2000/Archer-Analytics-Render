@@ -268,7 +268,19 @@
       "Bash(curl -s -X POST localhost:8000/api/dashboards/__TRACKED_VAR__/charts -H 'authorization: Bearer __TRACKED_VAR__' -H 'content-type: application/json' -d '{\"title\":\"six\",\"spec\":{\"dataset\":\"archer-findings\",\"chartType\":\"column\",\"mode\":\"clause\",\"measure\":\"count\",\"groupAgg\":\"count\",\"groupBy\":[\"age\",\"cve_type\",\"record_status\",\"priority\",\"approved_exception\",\"device_status\"]}}')",
       "Bash(curl -s -o /tmp/r.json -X POST localhost:8000/api/dashboards/__TRACKED_VAR__/charts/87/drill -H 'authorization: Bearer __TRACKED_VAR__' -H 'content-type: application/json' -d '{\"steps\":[{\"dimension\":\"age\",\"value\":\"Red\"},{\"dimension\":\"cve_type\",\"value\":\"Application\"},{\"dimension\":\"record_status\",\"value\":\"Closed\"},{\"dimension\":\"priority\",\"value\":\"1\"},{\"dimension\":\"approved_exception\",\"value\":\"No\"}]}')",
       "Bash(python3 -c 'import json;d=json.load\\(open\\(\"/tmp/r.json\"\\)\\);print\\(\"   \",{r[\"x\"]:int\\(r[\"y\"]\\) for r in d.get\\(\"rows\",[]\\)}\\)')",
-      "Bash(python3 /tmp/cmp.py)"
+      "Bash(python3 /tmp/cmp.py)",
+      "Bash(curl -s -o /tmp/r.json -X POST localhost:8000/api/dashboards/__TRACKED_VAR__/charts/__TRACKED_VAR__/drill -H 'authorization: Bearer __TRACKED_VAR__' -H 'content-type: application/json' -d '{\"steps\":[{\"dimension\":\"age\",\"value\":\"Green\"}]}')",
+      "Bash(python3 -c 'import json;d=json.load\\(open\\(\"/tmp/r.json\"\\)\\);print\\(d[\"rows\"][0][\"x\"]\\)')",
+      "Bash(curl -s -o /tmp/r2.json -w '  drill L2: %{time_total}s  ' -X POST localhost:8000/api/dashboards/__TRACKED_VAR__/charts/__TRACKED_VAR__/drill -H 'authorization: Bearer __TRACKED_VAR__' -H 'content-type: application/json' -d '{\"steps\":[{\"dimension\":\"age\",\"value\":\"Green\"},{\"dimension\":\"cve\",\"value\":\"__TRACKED_VAR__\"}]}')",
+      "Bash(python3 -c 'import json;d=json.load\\(open\\(\"/tmp/r2.json\"\\)\\);r=d.get\\(\"rows\",[]\\);print\\(\"bars=\",len\\(r\\),{x[\"x\"]:int\\(x[\"y\"]\\) for x in r}\\)')",
+      "Bash(python3 -c 'import json;d=json.load\\(open\\(\"/tmp/r.json\"\\)\\);print\\(\"   L1 sum =\",sum\\(int\\(x[\"y\"]\\) for x in d[\"rows\"]\\),\"\\(capped at 5000 bars of 69k CVEs — flagged in UI\\)\"\\)')",
+      "Bash(curl -s -o /dev/null -w '  deleted render-test \\(%{http_code}\\)\\\\n' -X DELETE localhost:8000/api/dashboards/__CMDSUB_OUTPUT__ -H 'authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s -o /dev/null -X POST localhost:8000/api/dashboards/__TRACKED_VAR__/charts/__TRACKED_VAR__/drill -H 'authorization: Bearer __TRACKED_VAR__' -H 'content-type: application/json' -d '{\"steps\":[{\"dimension\":\"age\",\"value\":\"Green\"}]}')",
+      "Bash(curl -s -o /dev/null -w '  deleted big-level \\(%{http_code}\\)\\\\n' -X DELETE localhost:8000/api/dashboards/__CMDSUB_OUTPUT__ -H 'authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s localhost:8000/api/dashboards/__TRACKED_VAR__ -H 'authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s -o /tmp/p.json -X POST localhost:8000/api/dashboards/query-preview -H 'authorization: Bearer __TRACKED_VAR__' -H 'content-type: application/json' -d '{\"dataset\":\"archer-findings\",\"chartType\":\"column\",\"mode\":\"clause\",\"measure\":\"count\",\"groupAgg\":\"avg\",\"groupBy\":[\"age\",\"cve_type\"]}')",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('/tmp/p.json'\\)\\);print\\('  grouping avg \\(sampled\\):',{r['x']:float\\(r['y']\\) for r in d['rows']}\\)\")",
+      "Bash(curl -s -o /tmp/v.json -w '  reports list http=%{http_code}\\\\n' localhost:8000/api/reports -H 'authorization: Bearer __TRACKED_VAR__')"
     ]
   }
 }

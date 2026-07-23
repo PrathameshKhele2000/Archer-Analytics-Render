@@ -3,6 +3,13 @@ import { api, ChartSpec, DashboardWithData } from "../api";
 import { AgingStack, BusinessUnitBars, MonthlyTrend, SeverityDonut } from "./Charts";
 import ChartEditor from "./ChartEditor";
 import DrilldownChart from "./DrilldownChart";
+
+/**
+ * Shared empty array for widgets with no data yet. `?? []` built a NEW array on every
+ * render, which looked like fresh data to the child — resetting an in-progress drill
+ * back to the base level.
+ */
+const NO_ROWS: any[] = [];
 import RecordsChart from "./RecordsChart";
 
 /** Legacy fixed widgets (older seeded dashboards) keep their bespoke components. */
@@ -113,11 +120,11 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
                   )}
                 </div>
                 {isBuilt && w.widget_type === "table" ? (
-                  <RecordsChart widget={w} rows={data[w.key] ?? []} />
+                  <RecordsChart widget={w} rows={data[w.key] ?? NO_ROWS} />
                 ) : isBuilt ? (
-                  <DrilldownChart dashboardKey={dashboardKey} widget={w} baseRows={data[w.key] ?? []} />
+                  <DrilldownChart dashboardKey={dashboardKey} widget={w} baseRows={data[w.key] ?? NO_ROWS} />
                 ) : (
-                  <LegacyChart type={w.widget_type} rows={data[w.key] ?? []} />
+                  <LegacyChart type={w.widget_type} rows={data[w.key] ?? NO_ROWS} />
                 )}
               </section>
             );

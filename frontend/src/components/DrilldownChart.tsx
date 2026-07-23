@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { api, DashboardWidget, DrillStep, Finding, QueryRow } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, DashboardWidget, DrillStep, Finding, isRolledUpGroup, QueryRow } from "../api";
 import { buildCsv, downloadText } from "../csv";
 import { formatCell } from "../recordColumns";
 import ExportMenu from "./ExportMenu";
@@ -57,9 +57,19 @@ export default function DrilldownChart({
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // A level's long tail arrives as one "Other (N more)" bar. It keeps the chart's total
+  // honest, but it is often far larger than any single group and then flattens all of
+  // them — so it can be taken out of the view without changing the underlying data.
+  const [showOther, setShowOther] = useState(true);
   const wrapRef = useRef<HTMLDivElement>(null);
   const toggleSeries = (n: string) =>
     setHidden((prev) => { const s = new Set(prev); if (s.has(n)) s.delete(n); else s.add(n); return s; });
+
+  const hasOther = rows.some((r) => isRolledUpGroup(r.x));
+  const chartRows = useMemo(
+    () => (showOther ? rows : rows.filter((r) => !isRolledUpGroup(r.x))),
+    [rows, showOther],
+  );
 
   // Series/categories available to the legend for the current (possibly drilled) rows.
   const legendVals = legendNames(widget.widget_type, rows);
@@ -104,6 +114,9 @@ export default function DrilldownChart({
 
   const onSectionClick = async (value: string) => {
     if (!drillEnabled || busy) return;
+    // The "Other (N more)" bar stands for many values at once — there is no single
+    // group beneath it to descend into.
+    if (isRolledUpGroup(value)) return;
     setBusy(true);
     try {
       if (!atLeaf) {
@@ -177,6 +190,12 @@ export default function DrilldownChart({
           </span>
         )}
 
+        {hasOther && !records && !tableView && (
+          <button className={`drill-toggle${showOther ? " on" : ""}`} onClick={() => setShowOther((v) => !v)}
+                  title="The rolled-up tail is usually far bigger than any single group, which flattens the rest of the chart.">
+            {showOther ? "Other shown" : "Other hidden"}
+          </button>
+        )}
         {records && <button className="link-btn" onClick={() => setRecords(null)}>← back to chart</button>}
         {drillEnabled && !records && !atLeaf && <span className="hint">click a section to drill in</span>}
         {drillEnabled && !records && atLeaf && <span className="hint">click a section to see records</span>}
@@ -195,7 +214,7 @@ export default function DrilldownChart({
       ) : (
         <GenericChart
           type={widget.widget_type}
-          rows={rows}
+          rows={chartRows}
           showLegend={spec.showLegend}
           theme={spec.theme}
           hidden={hidden}

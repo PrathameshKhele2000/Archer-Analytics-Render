@@ -145,11 +145,26 @@ export class CatalogService {
 
       // ---- dimensions (chart X axis / Group By) ----
       if (f.is_dimension) {
-        const expr = f.data_type === "json" ? `COALESCE(${ref}->>0, '(none)')` : `COALESCE(${ref}, '(none)')`;
+        // A dimension labels each group, so it must be TEXT to carry the '(none)'
+        // placeholder for NULLs. Only text columns can take that literal directly —
+        // COALESCE(<integer>, '(none)') asks Postgres to read "(none)" as a number and
+        // the query dies, which broke every chart grouped by a number, date or boolean.
+        const expr = f.data_type === "json"
+          ? `COALESCE(${ref}->>0, '(none)')`
+          : f.data_type === "text"
+            ? `COALESCE(${ref}, '(none)')`
+            : `COALESCE(${ref}::text, '(none)')`;
         // A plain (non-json) column can be filtered on the raw column (index-usable);
         // json paths cannot, so they keep only the computed expression.
         const sourceCol = f.data_type === "json" ? undefined : ref;
-        catalog.dimensions[col] = { key: col, label, expr, order: orderByOptions(col, expr), sourceCol };
+        // Sort by the RAW column for anything non-text, so 2 < 10 < 100 and dates run
+        // chronologically instead of alphabetically ("10" before "2"). Wrapped in min()
+        // because the query groups by the TEXT expression above — the raw column isn't a
+        // grouping key, and every row in a group shares its value, so min() just reads it.
+        const naturalOrder = f.data_type === "json" || f.data_type === "text" ? undefined : `min(${ref})`;
+        catalog.dimensions[col] = {
+          key: col, label, expr, order: orderByOptions(col, expr) ?? naturalOrder, sourceCol,
+        };
       }
       // Date fields get month/year buckets automatically.
       if (f.data_type === "date" || f.data_type === "timestamp") {

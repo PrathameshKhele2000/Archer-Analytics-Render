@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 import { QueryRow } from "../api";
 
@@ -44,17 +44,29 @@ function useEcharts(
     // set (the toolbar dropdown writes to it too), so the event is routed back to it
     // and the legend's own selected state is re-derived from that on the next render.
     chart.current.on("legendselectchanged", (p: any) => legendRef.current?.(String(p.name)));
-    const onResize = () => chart.current?.resize();
-    window.addEventListener("resize", onResize);
-    return () => { window.removeEventListener("resize", onResize); chart.current?.dispose(); };
+    // Covers both window resizes and the container widening when a dense chart switches
+    // to the scrolling layout. Doing it here rather than on every option change means a
+    // redraw is never triggered just because the component re-rendered.
+    const ro = new ResizeObserver(() => chart.current?.resize());
+    ro.observe(ref.current);
+    return () => { ro.disconnect(); chart.current?.dispose(); };
   }, []);
+
   useEffect(() => {
     if (!chart.current) return;
-    chart.current.clear();
-    if (option) chart.current.setOption(option);
-    // Show a pointer cursor when the chart is clickable (drill enabled).
-    if (ref.current) ref.current.style.cursor = clickRef.current ? "pointer" : "default";
-  }, [option, onClick]);
+    // notMerge replaces the chart in one paint. clear() + setOption() blanked the canvas
+    // first, so every re-render flashed — most visibly on a drill click, where React
+    // renders three times (busy on, rows in, busy off) and two of those carry identical
+    // data. `option` is memoised upstream, so this now runs only when something changed.
+    if (option) chart.current.setOption(option, { notMerge: true });
+    else chart.current.clear();
+  }, [option]);
+
+  // Cursor tracks clickability without touching the chart itself.
+  useEffect(() => {
+    if (ref.current) ref.current.style.cursor = onClick ? "pointer" : "default";
+  }, [onClick]);
+
   return ref;
 }
 
@@ -176,12 +188,34 @@ function buildPie(
   };
 }
 
+/**
+ * Width a category axis needs to stay readable. Squeezing 200 bars into 700px gives
+ * each one 3px and an unreadable axis, so past a threshold the canvas grows and the
+ * panel scrolls horizontally instead of compressing.
+ *
+ * The overall width is bounded because browsers refuse to paint an arbitrarily wide
+ * canvas — beyond that the bars do get thinner, which is the honest outcome for a
+ * chart with thousands of categories.
+ */
+const PX_PER_CATEGORY = 34;
+const MAX_CANVAS_PX = 24_000;
+
+function scrollWidth(categories: number): number | undefined {
+  if (categories < 2) return undefined;
+  return Math.min(MAX_CANVAS_PX, categories * PX_PER_CATEGORY);
+}
+
 function useEchartsPanel(
   option: echarts.EChartsOption | null, label: string,
   onClick?: (name: string) => void, onLegendToggle?: (name: string) => void,
+  minWidth?: number,
 ) {
   const ref = useEcharts(option, onClick, onLegendToggle);
-  return <div className="chart" ref={ref} role="img" aria-label={label} />;
+  // minWidth drives the canvas; the parent (.chart-wrap) provides the scrollbar.
+  return (
+    <div className="chart" ref={ref} role="img" aria-label={label}
+         style={minWidth ? { minWidth: `${minWidth}px` } : undefined} />
+  );
 }
 
 /**
@@ -238,24 +272,50 @@ function ChartWithLegend({
   const toggle = controlled ? onToggleHidden : toggleInternal;
 
   const palette = paletteOf(theme);
-  let option: echarts.EChartsOption | null = null;
-  switch (type) {
-    case "bar": option = buildCartesian(rows, "bar", true, false, hidden, palette, wantsLegend); break;
-    case "column": option = buildCartesian(rows, "bar", false, false, hidden, palette, wantsLegend); break;
-    case "line": option = buildCartesian(rows, "line", false, false, hidden, palette, wantsLegend); break;
-    case "area": option = buildCartesian(rows, "line", false, true, hidden, palette, wantsLegend); break;
-    case "pie": option = buildPie(rows, false, hidden, palette, wantsLegend); break;
-    case "donut": option = buildPie(rows, true, hidden, palette, wantsLegend); break;
-    default: option = null;
-  }
+  // Built only when its inputs change. Rebuilding it every render gave the redraw effect
+  // a new object each time, so the chart repainted on unrelated state changes too.
+  const option = useMemo<echarts.EChartsOption | null>(() => {
+    if (!rows.length) return null;
+    switch (type) {
+      case "bar": return buildCartesian(rows, "bar", true, false, hidden, palette, wantsLegend);
+      case "column": return buildCartesian(rows, "bar", false, false, hidden, palette, wantsLegend);
+      case "line": return buildCartesian(rows, "line", false, false, hidden, palette, wantsLegend);
+      case "area": return buildCartesian(rows, "line", false, true, hidden, palette, wantsLegend);
+      case "pie": return buildPie(rows, false, hidden, palette, wantsLegend);
+      case "donut": return buildPie(rows, true, hidden, palette, wantsLegend);
+      default: return null;
+    }
+  }, [type, rows, hidden, palette, wantsLegend]);
 
-  const panel = useEchartsPanel(rows.length ? option : null, `${type} chart`, onSliceClick, toggle);
+  // Only a category axis needs room per value; pie/donut have no axis to crowd.
+  const cartesian = ["bar", "column", "line", "area"].includes(type);
+  // A horizontal bar chart grows DOWNWARD with categories, so widening it doesn't help.
+  const minWidth = cartesian && type !== "bar" ? scrollWidth(uniq(rows.map((r) => r.x)).length) : undefined;
+
+  const panel = useEchartsPanel(option, `${type} chart`, onSliceClick, toggle, minWidth);
   return (
-    <div className="chart-wrap">
+    <div className={`chart-wrap${minWidth ? " is-scrollable" : ""}`}>
       {canDropdown && <SeriesLegend names={names} hidden={hidden} onToggle={toggleInternal} palette={palette} />}
       {panel}
     </div>
   );
+}
+
+/**
+ * Grouping rows (g0, g1, … + y) folded to one labelled bar each, cached against the
+ * source array so repeated renders reuse the same result — and therefore the same
+ * object identity the redraw memo depends on.
+ */
+const foldedClauseRows = new WeakMap<object, QueryRow[]>();
+function foldClauseRows(rows: QueryRow[], levelCount: number): QueryRow[] {
+  const cached = foldedClauseRows.get(rows);
+  if (cached) return cached;
+  const folded = rows.map((r: any) => ({
+    x: Array.from({ length: levelCount }, (_, l) => r[`g${l}`] ?? "—").join(" / "),
+    y: r.y,
+  })) as QueryRow[];
+  foldedClauseRows.set(rows, folded);
+  return folded;
 }
 
 interface GenericChartProps {
@@ -304,10 +364,9 @@ export default function GenericChart({ type, rows: rawRows, showLegend, theme, o
 
     // Any other chart type: fold the levels into one readable label per bar/slice
     // ("Green / Application"), so the groups are actually visible on the chart.
-    rows = rows.map((r: any) => ({
-      x: Array.from({ length: levelCount }, (_, l) => r[`g${l}`] ?? "—").join(" / "),
-      y: r.y,
-    })) as QueryRow[];
+    // Cached on the source rows: a fresh array here would be a new identity every
+    // render, defeating the memo that keeps the chart from repainting needlessly.
+    rows = foldClauseRows(rawRows, levelCount);
   }
 
   // 'number' and 'table' render as plain HTML, not ECharts.

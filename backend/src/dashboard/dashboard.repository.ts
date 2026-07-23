@@ -8,7 +8,7 @@ import {
   QUERY_BUILDER_SOURCE,
   WIDGET_DATA_SOURCES,
 } from "./dashboard.entity";
-import { BREAKDOWN_MATVIEW_CAP } from "./query-builder";
+import { BREAKDOWN_MATVIEW_CAP, CHART_TOP_GROUPS, MAX_CHART_GROUPS, OTHER_LABEL_PREFIX } from "./query-builder";
 
 @Injectable()
 export class DashboardRepository extends BaseRepository<DashboardRow> {
@@ -131,15 +131,47 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
     const tmp = `${mv}_build`;
     await this.query(`DROP MATERIALIZED VIEW IF EXISTS ${tmp}`);
     await this.query(`CREATE MATERIALIZED VIEW ${tmp} AS ${selectSql}`);
+
+    // Record whether the breakdown fitted, so readers don't have to walk the matview to
+    // find out. Counting once here costs a scan; probing on every read cost one per click.
+    const { rows: cnt } = await this.query<{ n: string }>(`SELECT count(*) AS n FROM ${tmp}`);
+    const rowCount = Number(cnt[0]?.n ?? 0);
+    const truncated = rowCount > BREAKDOWN_MATVIEW_CAP;
+
+    // Drilling filters on the leading level columns (g0, g0+g1, …), so one index over
+    // them in order serves every level via its prefix. Named uniquely: the outgoing
+    // matview still owns its own index until the swap drops it.
+    const { rows: cols } = await this.query<{ attname: string }>(
+      `SELECT a.attname FROM pg_class c
+         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0
+        WHERE c.relname = $1 AND a.attname ~ '^g[0-9]+$'
+        ORDER BY a.attnum`,
+      [tmp],
+    );
+    if (cols.length) {
+      const idx = `${mv}_gidx_${Date.now().toString(36)}`;
+      await this.query(`CREATE INDEX ${idx} ON ${tmp} (${cols.map((c) => c.attname).join(", ")})`);
+    }
+
     await this.transaction(async (client) => {
       await client.query(`DROP MATERIALIZED VIEW IF EXISTS ${mv}`);
       await client.query(`ALTER MATERIALIZED VIEW ${tmp} RENAME TO ${mv}`);
+      await client.query(
+        `INSERT INTO chart_matview_state (widget_id, truncated, row_count, built_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (widget_id) DO UPDATE
+            SET truncated = EXCLUDED.truncated,
+                row_count = EXCLUDED.row_count,
+                built_at  = EXCLUDED.built_at`,
+        [widgetId, truncated, rowCount],
+      );
     });
   }
 
   async dropChartMatview(widgetId: number): Promise<void> {
     await this.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}`);
     await this.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}_build`);
+    await this.query(`DELETE FROM chart_matview_state WHERE widget_id = $1`, [widgetId]);
   }
 
   async readChartMatview(widgetId: number): Promise<any[]> {
@@ -171,10 +203,25 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
    * "this chart can't be pre-aggregated", so a doomed build isn't re-run on every load.
    */
   async breakdownTruncated(widgetId: number): Promise<boolean> {
-    const { rows } = await this.query(
-      `SELECT 1 FROM mv_chart_${widgetId} OFFSET ${BREAKDOWN_MATVIEW_CAP - 1} LIMIT 1`,
+    const { rows } = await this.query<{ truncated: boolean }>(
+      `SELECT truncated FROM chart_matview_state WHERE widget_id = $1`,
+      [widgetId],
     );
-    return rows.length > 0;
+    if (rows.length) return rows[0].truncated;
+
+    // No record: the matview predates this bookkeeping. Work it out the expensive way
+    // once (this also confirms the matview exists — the caller rebuilds if it doesn't),
+    // then store the answer so no later read pays for it.
+    const { rows: probe } = await this.query(
+      `SELECT 1 FROM mv_chart_${widgetId} OFFSET ${BREAKDOWN_MATVIEW_CAP} LIMIT 1`,
+    );
+    const truncated = probe.length > 0;
+    await this.query(
+      `INSERT INTO chart_matview_state (widget_id, truncated) VALUES ($1, $2)
+       ON CONFLICT (widget_id) DO UPDATE SET truncated = EXCLUDED.truncated`,
+      [widgetId, truncated],
+    );
+    return truncated;
   }
 
   async aggregateChartMatview(
@@ -182,22 +229,69 @@ export class DashboardRepository extends BaseRepository<DashboardRow> {
     /** Keep the split-by series (base level of a split chart); drill levels drop it. */
     withSeries = false,
   ): Promise<any[]> {
+    const mv = `mv_chart_${widgetId}`;
     const conds = stepValues.map((_, i) => `g${i} = $${i + 1}`);
     const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
     const sel = withSeries ? `g${level} AS x, s AS series` : `g${level} AS x`;
     const grp = withSeries ? `g${level}, s` : `g${level}`;
+    const cap = Math.min(MAX_CHART_GROUPS, Math.max(1, limit));
+
+    // Ask for one past the "too many to draw" threshold. Within it, the level is returned
+    // in the dimension's own order exactly as before — small charts are untouched.
     const { rows } = await this.query(
       // o<level> carries the dimension's own ordering; it is functionally dependent on
       // g<level>, so min() just picks it up without widening the grouping.
       `SELECT ${sel}, ${reaggExpr} AS y
-       FROM mv_chart_${widgetId}
+       FROM ${mv}
        ${where}
        GROUP BY ${grp}
        ORDER BY min(o${level})
-       LIMIT ${Math.min(1000, Math.max(1, limit))}`,
+       LIMIT ${Math.min(cap, CHART_TOP_GROUPS + 1)}`,
       stepValues,
     );
-    return rows;
+    if (rows.length <= CHART_TOP_GROUPS || withSeries) return rows;
+
+    // Too many to draw. Return the biggest CHART_TOP_GROUPS and fold the rest into one
+    // "Other" bar, re-aggregated from the same stored components — so an avg stays a true
+    // weighted average and a sum stays exact, rather than an average of averages.
+    // The tail is re-aggregated from the matview rows of the non-top groups. Joining on
+    // the group value has to be NULL-safe (a group can BE null), but IS NOT DISTINCT FROM
+    // is not hashable — Postgres falls back to a nested loop over hundreds of thousands of
+    // rows, which took minutes. Comparing a coalesced surrogate keeps it a hash join.
+    // Everything here is cast to text on purpose. A grouping level is not always text —
+    // it can be an integer, date or timestamp — and both the NULL-safe join key and the
+    // UNION with the literal "Other" label need one common type. ::text is injective for
+    // these types, so identity is preserved.
+    const NULL_KEY = "__aa_null__";
+    const keyOf = (col: string) => `coalesce(${col}::text, '${NULL_KEY}')`;
+    const { rows: rolled } = await this.query(
+      `WITH lvl AS (
+         SELECT g${level} AS x, ${reaggExpr} AS y
+           FROM ${mv} ${where}
+          GROUP BY g${level}
+       ),
+       ranked AS (
+         SELECT x, y, row_number() OVER (ORDER BY y DESC NULLS LAST, x) AS rn FROM lvl
+       ),
+       tail AS (
+         SELECT ${keyOf("x")} AS k FROM ranked WHERE rn > ${CHART_TOP_GROUPS}
+       ),
+       rest AS (
+         SELECT ${reaggExpr} AS y
+           FROM ${mv} m
+           JOIN tail t ON t.k = ${keyOf(`m.g${level}`)}
+          ${conds.length ? `WHERE ${conds.join(" AND ")}` : ""}
+       )
+       SELECT x, y FROM (
+         SELECT x::text AS x, y, rn AS ord FROM ranked WHERE rn <= ${CHART_TOP_GROUPS}
+         UNION ALL
+         SELECT '${OTHER_LABEL_PREFIX}' || (SELECT count(*) FROM tail) || ' more)',
+                (SELECT y FROM rest),
+                ${CHART_TOP_GROUPS + 1}
+       ) o ORDER BY ord`,
+      stepValues,
+    );
+    return rolled;
   }
 
   // ---- Admin config ----

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ChartSpec, ChartTypeDef, DashboardSchema, DrillStep, FieldsCatalog, FilterCondition, QueryRow, RecordRow } from "../api";
+import { api, ChartSpec, ChartTypeDef, DashboardSchema, DrillStep, FieldsCatalog, FilterCondition, isRolledUpGroup, QueryRow, RecordRow } from "../api";
 
 import FilterConditions from "./FilterConditions";
 import GenericChart, { CHART_THEMES } from "./GenericChart";
@@ -80,9 +80,20 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   // Rows and the "was this sampled?" flag come from the same response, so they're held
   // together — keeping them in separate state lets them drift out of sync.
   // rows: QueryRow[] for charts, RecordRow[] for the table (records list).
-  const [result, setResult] = useState<{ rows: any[]; approximate: boolean }>({ rows: [], approximate: false });
+  const [result, setResult] = useState<{
+    rows: any[]; approximate: boolean;
+    topGroups?: { shown: number; total: number; rolledUp: boolean };
+  }>({ rows: [], approximate: false });
   const preview = result.rows;
   const approximate = result.approximate;
+  const topGroups = result.topGroups;
+  // The rolled-up tail is usually far larger than any single group and flattens the
+  // rest, so it can be dropped from the view — the saved chart offers the same switch.
+  const [showOther, setShowOther] = useState(true);
+  const previewRows = useMemo(
+    () => (showOther ? preview : preview.filter((r: any) => !isRolledUpGroup(r.x))),
+    [preview, showOther],
+  );
   const [previewing, setPreviewing] = useState(false); // a preview request is in flight
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -214,7 +225,8 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
     logic: logic.trim() || null,
     showLegend,
     theme,
-    limit: limit ? Number(limit) : null,
+    // Only a records list is limited; aggregated charts return every group.
+    limit: isTable && limit ? Number(limit) : null,
     // Grouping mode drills through its group-by levels, so it carries no separate
     // drill-down path.
     drilldown: needsDimension && !isClause ? drilldown : [],
@@ -286,7 +298,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
       req
         .then((r: any) => {
           if (seq !== previewSeq.current) return;
-          setResult({ rows: r.rows, approximate: !!r.approximate });
+          setResult({ rows: r.rows, approximate: !!r.approximate, topGroups: r.topGroups });
         })
         .catch((e) => {
           if (seq !== previewSeq.current) return;
@@ -539,11 +551,20 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
                     + "every bar is already named on its axis. Add a Group By (or switch to Pie/Donut) "
                     + "to give colour a meaning, and the legend turns on."}
               </p>
-              <label className="inline-field">
-                Row limit
-                <input type="number" min={1} max={1000} value={limit}
-                       onChange={(e) => setLimit(e.target.value)} />
-              </label>
+              {/* Only a records LIST has a meaningful row count. An aggregated chart
+                  shows every group it has — capping those dropped whole categories
+                  from the picture rather than shortening a list. */}
+              {isTable ? (
+                <label className="inline-field">
+                  Records to show
+                  <input type="number" min={1} max={1000} value={limit}
+                         onChange={(e) => setLimit(e.target.value)} />
+                </label>
+              ) : (
+                <p className="muted small">
+                  This chart shows <b>every</b> value in its data — nothing is capped.
+                </p>
+              )}
             </div>
           )}
 
@@ -615,6 +636,20 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
         <div className="field-label">
           Live preview
           {previewing && <span className="preview-status">updating…</span>}
+          {!previewing && topGroups && (
+            <span className="preview-status approx"
+                  title={topGroups.rolledUp
+                    ? `This field has ${topGroups.total.toLocaleString()} distinct values. The ${topGroups.shown} largest are drawn and the rest are combined into one "Other" bar, so the chart's total still matches the data.`
+                    : `This field has ${topGroups.total.toLocaleString()} distinct values. The ${topGroups.shown} largest are drawn; an average cannot be combined across the rest, so they are not shown. Pick a less granular field or filter the data down.`}>
+              top {topGroups.shown} of {topGroups.total.toLocaleString()} values
+              {topGroups.rolledUp ? " + Other" : ""}
+            </span>
+          )}
+          {!previewing && topGroups?.rolledUp && !isTable && (
+            <button type="button" className="link-btn" onClick={() => setShowOther((v) => !v)}>
+              {showOther ? "hide Other" : "show Other"}
+            </button>
+          )}
           {!previewing && approximate && !isTable && (
             <span className="preview-status approx" title="Previews of very large datasets are estimated from a random sample so the designer stays responsive. The saved chart always uses the exact numbers.">
               estimated from a sample
@@ -656,7 +691,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
           ) : preview.length || chartType === "number" ? (
             <GenericChart
               type={chartType}
-              rows={preview}
+              rows={previewRows}
               showLegend={showLegend}
               theme={theme}
               // Drilled levels are a plain one-dimension breakdown, so the multi-column

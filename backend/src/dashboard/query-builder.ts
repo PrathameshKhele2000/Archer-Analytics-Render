@@ -197,7 +197,7 @@ export function buildRecordsChartQuery(spec: ChartSpec, catalog: Catalog): { sql
   validateSpec(spec, catalog);
   const columns = recordChartColumns(spec, catalog);
   const { where, params } = buildChartWhere(spec, catalog, []); // conditions/logic only (no drill for a list)
-  const limit = resolveLimit(spec.limit);
+  const limit = recordsLimit(spec.limit);
   const selects = columns.map((c) => `${c.expr} AS ${c.key}`);
   const orderBy = recordsOrderBy(catalog);
   const sql = `
@@ -278,7 +278,41 @@ export function validateSpec(spec: ChartSpec, catalog: Catalog): void {
   }
 }
 
-function resolveLimit(limit?: number | null): number {
+/**
+ * A chart shows EVERY group its data has — no user-set cap. This is purely a safety
+ * ceiling so a dimension with ~900k distinct values (asset_id, device_name) can't be
+ * asked to draw 900k bars and lock the browser up.
+ *
+ * Reaching it is reported to the caller, never silent: the old behaviour quietly kept
+ * the first N groups in DIMENSION order (not the largest ones), so a chart could omit
+ * most of its data and still look complete.
+ */
+export const MAX_CHART_GROUPS = 5_000;
+
+/**
+ * How many bars a level draws before the tail is rolled into a single "Other" bucket.
+ *
+ * The database has no trouble with thousands of groups (a 5,000-group level re-aggregates
+ * in ~0.13s), but the browser does — drawing that many marks blocks the main thread for
+ * long enough to look like a hang. Nothing is discarded: the tail is re-aggregated from
+ * the same stored components, so the chart's total still matches the data exactly, and
+ * the table view and exports continue to list every group.
+ */
+export const CHART_TOP_GROUPS = 200;
+
+/** Label for the rolled-up tail. The prefix is a contract with the UI, which must not drill into it. */
+export const OTHER_LABEL_PREFIX = "Other (";
+
+/** Groups per chart level — always all of them, up to the safety ceiling. */
+function groupLimit(): number {
+  return MAX_CHART_GROUPS;
+}
+
+/**
+ * Rows a records LIST shows (Table chart / drill leaf). Unlike groups this is a genuine
+ * choice — the alternative is listing all 10M records — so a chart's own limit applies.
+ */
+function recordsLimit(limit?: number | null): number {
   if (limit == null || !Number.isFinite(limit)) return DEFAULT_LIMIT;
   return Math.min(MAX_LIMIT, Math.max(1, Math.floor(limit)));
 }
@@ -303,7 +337,7 @@ function buildAggregationCore(spec: ChartSpec, catalog: Catalog, opts: AggOpts =
   // record count, which made it impossible to compare sums/averages across two fields).
   const measureExpr = (catalog.measures[spec.measure] ?? catalog.measures.count).expr;
   const { where, params } = buildChartWhere(spec, catalog, opts.drill);
-  const limit = resolveLimit(spec.limit);
+  const limit = groupLimit();
 
   // ---- Clause (Grouping): the group-by levels form a DRILL HIERARCHY. The base chart
   // shows the FIRST level; clicking a bar/slice descends to the next level, filtered by
@@ -405,15 +439,19 @@ export function buildAggregationInline(spec: ChartSpec, catalog: Catalog): strin
 /** Safety cap on distinct group combinations a clause matview stores. */
 /**
  * Ceiling on rows in a breakdown matview. It holds one row per COMBINATION of the
- * chart's levels, so the count is the product of their cardinalities — four levels
- * ending in a 900k-value field is ~10M combinations, which is no longer a summary.
+ * chart's levels, so the count is the product of their cardinalities.
  *
- * The build deliberately fetches CAP + 1 rows: overshooting by one is how a reader
- * tells "this is the whole breakdown" from "this was cut off", and a cut-off
- * breakdown must never be served (it would silently under-count). See
- * DashboardRepository.breakdownTruncated.
+ * Sized so ordinary charts fit: grouping by age × CVE × status over 10M findings needs
+ * ~1.3M combinations, and at 200k it didn't fit — that chart fell back to querying the
+ * source on every click (~6s a drill) even though its breakdown is only tens of MB.
+ * A breakdown approaching the row count of the source table is no longer a summary and
+ * isn't worth storing, which is what this still rules out.
+ *
+ * The build deliberately fetches CAP + 1 rows: overshooting by one is how a reader tells
+ * "this is the whole breakdown" from "this was cut off", and a cut-off breakdown must
+ * never be served (it would silently under-count).
  */
-export const BREAKDOWN_MATVIEW_CAP = 200_000;
+export const BREAKDOWN_MATVIEW_CAP = 2_000_000;
 
 /** The roll-ups Grouping offers over sub-group record counts. */
 const GROUP_AGGS = new Set(["count", "sum", "avg", "min", "max"]);

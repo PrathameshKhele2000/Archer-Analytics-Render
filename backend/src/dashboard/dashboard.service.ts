@@ -8,7 +8,7 @@ import { CacheService } from "../cache/cache.service";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { DATA_SOURCE_CATALOG, QUERY_BUILDER_SOURCE } from "./dashboard.entity";
 import { DashboardRepository } from "./dashboard.repository";
-import { buildAggregation, buildAggregationInline, buildBreakdownMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, groupAggOf, measureReaggParts, mergeScope, schemaCatalog } from "./query-builder";
+import { buildAggregation, buildAggregationInline, buildBreakdownMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, CHART_TOP_GROUPS, groupAggOf, MAX_CHART_GROUPS, measureReaggParts, OTHER_LABEL_PREFIX, mergeScope, schemaCatalog } from "./query-builder";
 import { Logger } from "@nestjs/common";
 import { CatalogService } from "../datasets/catalog.service";
 import { ReportsService } from "../reports/reports.service";
@@ -27,10 +27,13 @@ import {
 
 const DEFAULT_DATASET = "archer-findings";
 
-/** Groups shown per chart level (matches the query-builder's default/cap). */
-function resolveChartLimit(limit?: number | null): number {
-  if (limit == null || !Number.isFinite(limit)) return 50;
-  return Math.min(1000, Math.max(1, Math.floor(limit)));
+/**
+ * Groups shown per chart level: all of them, up to the safety ceiling. This used to
+ * default to 50 while the live/preview path defaulted to 500, which is why a saved
+ * chart could show fewer bars than the preview it was designed from.
+ */
+function resolveChartLimit(_limit?: number | null): number {
+  return MAX_CHART_GROUPS;
 }
 
 function slugify(name: string): string {
@@ -81,8 +84,10 @@ export class DashboardService {
       dataset: view.datasetKey,
       conditions: merged.conditions,
       logic: merged.logic,
-      // A "top N" view caps the chart's group limit too, so it can't surface more than
-      // the view would show.
+      // A "top N" view caps how many RECORDS a Table chart lists, matching what the view
+      // itself shows. It no longer caps aggregated charts: a bar chart's groups are
+      // summaries of the whole scope, not a row listing, so capping them would drop
+      // categories rather than shorten a list.
       limit: view.rowLimit != null ? Math.min(spec.limit ?? view.rowLimit, view.rowLimit) : spec.limit,
     };
   }
@@ -328,10 +333,54 @@ export class DashboardService {
           rows = rows.map((r) => ({ ...r, y: Math.round(Number(r.y) * sampled.scale) }));
         }
       }
-      result = { rows, approximate: !!sampled };
+      result = { rows: [], approximate: !!sampled };
+      Object.assign(result, DashboardService.previewTopGroups(rows, spec as ChartSpec, catalog));
     }
     await this.cache.setJson(cacheKey, result, 300); // 5 min; invalidated on sync
     return result;
+  }
+
+  /**
+   * Trim a preview to the groups worth drawing. A level with thousands of values is what
+   * the saved chart rolls up too — without this the designer draws every bar and locks
+   * the browser up, which is the one thing a preview must never do.
+   *
+   * The tail is folded into a single "Other" bar when the measure allows it to be
+   * recombined exactly from per-group results (count/sum are additive; min-of-mins and
+   * max-of-maxes hold). An AVERAGE of averages is not the average, so rather than invent
+   * a number the tail is reported as a count of omitted groups and the editor says so.
+   */
+  private static previewTopGroups(
+    rows: any[], spec: ChartSpec, catalog: any,
+  ): { rows: any[]; topGroups?: { shown: number; total: number; rolledUp: boolean } } {
+    const hasSeries = rows.some((r) => r.series != null);
+    if (rows.length <= CHART_TOP_GROUPS || hasSeries) return { rows };
+
+    const sorted = [...rows].sort((a, b) => Number(b.y) - Number(a.y));
+    const top = sorted.slice(0, CHART_TOP_GROUPS);
+    const tail = sorted.slice(CHART_TOP_GROUPS);
+
+    const agg = DashboardService.isClauseChart(spec)
+      ? groupAggOf(spec)
+      : /^\s*round\(\s*(\w+)/.exec(catalog.measures[spec.measure]?.expr ?? "")?.[1]
+        ?? /^\s*(\w+)\s*\(/.exec(catalog.measures[spec.measure]?.expr ?? "")?.[1]
+        ?? "";
+    const vals = tail.map((r) => Number(r.y));
+    const combine: Record<string, () => number> = {
+      count: () => vals.reduce((s, v) => s + v, 0),
+      sum: () => vals.reduce((s, v) => s + v, 0),
+      min: () => Math.min(...vals),
+      max: () => Math.max(...vals),
+    };
+    const fold = combine[agg];
+    if (!fold) {
+      // Not exactly recombinable (avg) — show the top groups and say what was left out.
+      return { rows: top, topGroups: { shown: top.length, total: rows.length, rolledUp: false } };
+    }
+    return {
+      rows: [...top, { x: `${OTHER_LABEL_PREFIX}${tail.length} more)`, y: fold() }],
+      topGroups: { shown: top.length, total: rows.length, rolledUp: true },
+    };
   }
 
   /**

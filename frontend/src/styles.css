@@ -870,3 +870,15 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 .preview-drillbar .link-btn:disabled { color: var(--muted); text-decoration: none; cursor: default; }
 .preview-drillbar .sep { color: var(--muted); }
 .preview-drillbar .hint { margin-left: auto; font-size: 10px; color: var(--muted); font-style: italic; }
+
+/* ---- Dense charts: scroll instead of compressing ----
+   Past ~20 categories a fixed-width plot gives each bar a few pixels and an unreadable
+   axis. The canvas is widened to keep a usable width per category and the panel scrolls
+   horizontally, so a Grouping drill into hundreds of values stays legible. */
+.chart-wrap.is-scrollable { overflow-x: auto; overflow-y: hidden; }
+.chart-wrap.is-scrollable > .chart { position: relative; inset: auto; height: 100%; width: auto; }
+.preview-panel .chart-wrap.is-scrollable > .chart { width: auto; flex: none; }
+/* A thin, unobtrusive scrollbar — the chart is the content, not the chrome. */
+.chart-wrap.is-scrollable::-webkit-scrollbar { height: 8px; }
+.chart-wrap.is-scrollable::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 4px; }
+.chart-wrap.is-scrollable::-webkit-scrollbar-thumb:hover { background: var(--muted); }

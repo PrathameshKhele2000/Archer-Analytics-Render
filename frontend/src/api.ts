@@ -287,6 +287,20 @@ export interface ChartSpec {
   caption?: string | null;
   tableColumns?: string[] | null;
 }
+/**
+ * Safety ceiling on groups a chart draws (mirrors the server). Charts are not capped by
+ * choice; this only stops a ~900k-value field from being asked to render 900k bars. A
+ * chart that reaches it is flagged in the UI rather than quietly showing partial data.
+ */
+export const MAX_CHART_GROUPS = 5000;
+
+/**
+ * Prefix the server uses for the bar that rolls up a level's long tail ("Other (4,800
+ * more)"). It stands for many values at once, so it is not a thing you can drill into.
+ */
+export const OTHER_LABEL_PREFIX = "Other (";
+export const isRolledUpGroup = (x?: string | null) => !!x && x.startsWith(OTHER_LABEL_PREFIX);
+
 export interface QueryRow { x?: string; series?: string; y: number; }
 export interface DrillStep { dimension: string; value: string; }
 export interface DrillResult { rows: QueryRow[]; dimension: string | null; atLeaf: boolean; }
@@ -400,6 +414,8 @@ export const api = {
         columns?: { key: string; label: string; numeric?: boolean }[];
         /** True when the numbers came from a sample of a very large table (designer only). */
         approximate?: boolean;
+        /** Set when the level had more groups than a chart can draw. */
+        topGroups?: { shown: number; total: number; rolledUp: boolean };
       }>("/api/dashboards/query-preview", spec),
     /** Drill one level into an UNSAVED spec — lets the designer preview the drill path. */
     previewDrill: (spec: ChartSpec, steps: DrillStep[]) =>
