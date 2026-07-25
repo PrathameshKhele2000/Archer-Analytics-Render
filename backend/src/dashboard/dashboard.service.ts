@@ -8,7 +8,7 @@ import { CacheService } from "../cache/cache.service";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { DATA_SOURCE_CATALOG, QUERY_BUILDER_SOURCE } from "./dashboard.entity";
 import { DashboardRepository } from "./dashboard.repository";
-import { buildAggregation, buildAggregationInline, buildBreakdownMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, CHART_TOP_GROUPS, groupAggOf, MAX_CHART_GROUPS, measureReaggParts, OTHER_LABEL_PREFIX, mergeScope, schemaCatalog } from "./query-builder";
+import { buildAggregation, buildAggregationInline, buildBreakdownMatviewInline, buildDrill, buildRecordsChartQuery, buildRecordsQuery, ChartSpec, clauseMeasureParts, drillSequence, DrillStep, CHART_TOP_GROUPS, groupAggOf, MAX_CHART_GROUPS, MAX_EXPORT_RECORDS, measureReaggParts, OTHER_LABEL_PREFIX, mergeScope, schemaCatalog } from "./query-builder";
 import { Logger } from "@nestjs/common";
 import { CatalogService } from "../datasets/catalog.service";
 import { ReportsService } from "../reports/reports.service";
@@ -581,8 +581,13 @@ export class DashboardService {
     return { rows, dimension, atLeaf };
   }
 
-  /** Raw records behind a chart's full drill path (the leaf-level table). */
-  async chartRecords(key: string, widgetId: number, user: AuthenticatedUser, steps: DrillStep[]) {
+  /**
+   * Raw records behind a chart's full drill path (the leaf-level table).
+   * `full`: the on-screen table only needs a fast representative sample, but an export
+   * must contain every matching row (up to MAX_EXPORT_RECORDS), else it silently omits
+   * data the user can see on screen.
+   */
+  async chartRecords(key: string, widgetId: number, user: AuthenticatedUser, steps: DrillStep[], full = false) {
     const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
     if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
     const widget = (await this.repo.listWidgets(dashboard.id, false)).find((w) => w.id === widgetId);
@@ -598,9 +603,9 @@ export class DashboardService {
         throw new BadRequestException("Drill path does not match this chart's drill-down sequence");
       }
     });
-    const { sql, params } = buildRecordsQuery(spec, await this.catalogFor(spec), steps);
+    const { sql, params } = buildRecordsQuery(spec, await this.catalogFor(spec), steps, { full });
     const rows = await this.repo.runAggregation(sql, params);
-    return { rows };
+    return { rows, truncated: full && rows.length >= MAX_EXPORT_RECORDS };
   }
 
   private async mustOwn(key: string, user: AuthenticatedUser) {
@@ -621,40 +626,76 @@ export class DashboardService {
     return candidate;
   }
 
-  async getWithData(key: string, user: AuthenticatedUser) {
+  /**
+   * Dashboard structure only — no chart data. This is what makes the page shell (title,
+   * panel grid, chart titles/captions) paint immediately regardless of how heavy any one
+   * chart's query is; each panel then fetches its own data independently via
+   * `getWidgetData` below. Splitting these two used to be one call (`getWithData`), which
+   * meant the WHOLE dashboard stayed blank until every widget — including the single
+   * heaviest one — had finished, so one cold high-cardinality chart stalled every other,
+   * already-fast chart on the same page.
+   */
+  async getShell(key: string, user: AuthenticatedUser) {
     const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
     if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
-
     const widgets = await this.repo.listWidgets(dashboard.id);
+    return { dashboard, widgets };
+  }
+
+  /**
+   * One widget's data. Cached per widget (not per dashboard) so adding or editing one
+   * chart never evicts its neighbours' cache, and a dashboard with a mix of cheap and
+   * expensive charts lets the cheap ones stay served from cache even while the
+   * expensive one is mid-rebuild.
+   */
+  async getWidgetData(key: string, widgetId: number, user: AuthenticatedUser): Promise<any[]> {
+    const dashboard = await this.repo.findAccessibleByKey(key, user.id, user.roles);
+    if (!dashboard) throw new ForbiddenException("You do not have access to this dashboard");
+    const widget = (await this.repo.listWidgets(dashboard.id)).find((w) => w.id === widgetId);
+    if (!widget) throw new NotFoundException("Chart not found");
+
     // View-based charts resolve per the viewer's own access, so their data must not be
-    // shared through the dashboard-wide cache (a viewer without access to a view would
-    // otherwise be served another user's rows). Cache only plain dashboards.
-    const hasViewChart = widgets.some((w) => (w.config as { viewKey?: string } | undefined)?.viewKey);
-    const cacheKey = `dash:${key}:data`;
-    if (!hasViewChart) {
-      const cached = await this.cache.getJson<Record<string, any[]>>(cacheKey);
-      if (cached) return { dashboard, widgets, data: cached };
+    // shared through cache (a viewer without access to the view would otherwise be
+    // served another user's rows).
+    const isViewChart = !!(widget.config as { viewKey?: string } | undefined)?.viewKey;
+    // Prefixed with the DASHBOARD key (not just the widget id) so the existing
+    // `invalidate(dashboardKey)` — an `invalidatePrefix` scan — still clears every one
+    // of a dashboard's per-widget entries without needing to change any call site.
+    const cacheKey = `dash:${key}:widget:${widgetId}:data`;
+    if (!isViewChart) {
+      const cached = await this.cache.getJson<any[]>(cacheKey);
+      if (cached) return cached;
     }
 
-    // Run every widget's query concurrently; user-built charts read a per-chart
-    // materialized view (instant, row-count-independent) with a live fallback.
+    let rows: any[];
+    if (widget.data_source === QUERY_BUILDER_SOURCE) {
+      rows = await this.chartData(widget, user);
+    } else {
+      // Legacy fixed-source widgets: tolerate a missing data source (return empty).
+      try {
+        rows = await this.repo.runWidgetData(widget.data_source);
+      } catch (e: any) {
+        this.log.warn(`widget ${widget.id} source '${widget.data_source}' failed: ${e?.message ?? e}`);
+        rows = [];
+      }
+    }
+    if (!isViewChart) await this.cache.setJson(cacheKey, rows);
+    return rows;
+  }
+
+  /**
+   * Whole dashboard, structure + every widget's data, in one call. Kept for any caller
+   * that genuinely needs an all-at-once snapshot (e.g. a server-side export); the
+   * interactive dashboard view uses getShell + getWidgetData instead so a slow chart
+   * can't hold up the fast ones. Composed from those same two methods, so there is one
+   * definition of "how a widget's data is computed", not two that could drift apart.
+   */
+  async getWithData(key: string, user: AuthenticatedUser) {
+    const { dashboard, widgets } = await this.getShell(key, user);
     const entries = await Promise.all(
-      widgets.map(async (widget): Promise<[string, any[]]> => {
-        if (widget.data_source === QUERY_BUILDER_SOURCE) {
-          return [widget.key, await this.chartData(widget, user)];
-        }
-        // Legacy fixed-source widgets: tolerate a missing data source (return empty).
-        try {
-          return [widget.key, await this.repo.runWidgetData(widget.data_source)];
-        } catch (e: any) {
-          this.log.warn(`widget ${widget.id} source '${widget.data_source}' failed: ${e?.message ?? e}`);
-          return [widget.key, []];
-        }
-      }),
+      widgets.map(async (w): Promise<[string, any[]]> => [w.key, await this.getWidgetData(key, w.id, user)]),
     );
-    const data: Record<string, any[]> = Object.fromEntries(entries);
-    if (!hasViewChart) await this.cache.setJson(cacheKey, data);
-    return { dashboard, widgets, data };
+    return { dashboard, widgets, data: Object.fromEntries(entries) as Record<string, any[]> };
   }
 
   // ---- Admin ----

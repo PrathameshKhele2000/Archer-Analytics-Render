@@ -93,14 +93,31 @@ export default function DrilldownChart({
     return { headers: [xLabel, valueLabel], out: rows.map((r) => [r.x ?? "", r.y]) };
   };
 
+  // At the leaf drill level the screen shows RAW RECORDS, not the aggregated `rows` —
+  // exporting must fetch the full matching set (the on-screen table is a fast sample,
+  // capped for display speed) rather than re-exporting the chart's aggregate data.
+  const exportRecordsData = async () => {
+    const res = await api.dashboards.records(dashboardKey, widget.id, records!.steps, true);
+    if (!res.rows.length) return { headers: [], out: [] as (string | number | null)[][], truncated: false };
+    const keys = Object.keys(res.rows[0]);
+    return {
+      headers: keys.map(humanize),
+      out: res.rows.map((r) => keys.map((k) => formatCell(r[k]))),
+      truncated: res.truncated,
+    };
+  };
+
   const doExport = async (format: "csv" | "excel" | "pdf") => {
-    const { headers, out } = exportData();
-    if (format === "csv") {
-      downloadText(`${widget.title || "chart"}.csv`, buildCsv(headers, out.map((r) => r.map((c) => String(c ?? "")))));
-      return;
-    }
     setExporting(format);
     try {
+      const { headers, out, truncated } = records ? await exportRecordsData() : { ...exportData(), truncated: false };
+      if (truncated) {
+        alert(`This selection has more rows than a single export can hold — the first ${out.length.toLocaleString()} are included.`);
+      }
+      if (format === "csv") {
+        downloadText(`${widget.title || "chart"}.csv`, buildCsv(headers, out.map((r) => r.map((c) => String(c ?? "")))));
+        return;
+      }
       const image = format === "pdf" ? (wrapRef.current?.querySelector("canvas")?.toDataURL("image/png") ?? undefined) : undefined;
       await api.dashboards.exportChart({ format, title: widget.title, caption: spec.caption ?? undefined, headers, rows: out, image });
     } catch (e) {

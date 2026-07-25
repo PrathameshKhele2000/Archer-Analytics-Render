@@ -61,9 +61,10 @@ export function normalizeKey(s: string): string {
 
 const DATASET_KEY_RE = /^[a-z][a-z0-9_]{1,40}$/;
 const COLUMN_RE = /^[a-z][a-z0-9_]{0,58}$/;
+const MAX_COLUMN_LEN = 58;
 
 /** Reserved because they're ours, not a dataset's. */
-const RESERVED_COLUMNS = new Set(["record_id", "synced_at"]);
+export const RESERVED_COLUMNS = new Set(["record_id", "synced_at"]);
 
 /**
  * Identifiers are generated and validated here — never interpolated from raw user
@@ -85,6 +86,34 @@ export function assertColumn(key: string): string {
   if (RESERVED_COLUMNS.has(key)) {
     throw new BadRequestException(`'${key}' is reserved and is added automatically`);
   }
+  return key;
+}
+
+/**
+ * Turn a label (or an explicit key hint) into a column name that is guaranteed to be
+ * usable — never throws. A raw `normalizeKey` output can collide with a reserved name
+ * (a CSV export column literally called "Record Id" normalizes to "record_id", which is
+ * OUR primary key column), can collide with an earlier field's key (two columns named
+ * "Status"), can be empty (a header of only symbols/emoji), or can start with a digit
+ * (COLUMN_RE requires a leading letter). Each case used to be a hard 400 that aborted
+ * dataset creation entirely; this resolves all of them into a distinct, valid name
+ * instead, so an admin's CSV headers never dictate whether the import even runs.
+ *
+ * `taken` accumulates keys already handed out in this same field list, so callers must
+ * process fields in order and reuse one Set across the whole batch.
+ */
+export function resolveColumnKey(labelOrKey: string, index: number, taken: Set<string>): string {
+  let base = normalizeKey(labelOrKey);
+  if (!/^[a-z]/.test(base)) base = base ? `f_${base}` : `field_${index + 1}`;
+  base = base.slice(0, MAX_COLUMN_LEN);
+
+  let key = base;
+  let n = 2;
+  while (RESERVED_COLUMNS.has(key) || taken.has(key)) {
+    const suffix = `_${n++}`;
+    key = base.slice(0, MAX_COLUMN_LEN - suffix.length) + suffix;
+  }
+  taken.add(key);
   return key;
 }
 

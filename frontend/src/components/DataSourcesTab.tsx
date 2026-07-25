@@ -32,6 +32,39 @@ const emptyDraft = (): CreateDatasetBody => ({
 const toColumn = (s: string) =>
   (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
 
+// Mirrors backend/src/datasets/dataset.entity.ts resolveColumnKey(). Kept in sync
+// deliberately rather than shared, so this file has no build dependency on the backend
+// package — but the algorithm must match, or the name shown here would lie about what
+// Create actually stores. "record_id" is what breaks most often: it's the column WE add
+// automatically, so a CSV header like "Record Id" (a routine Archer export column)
+// collides with it — the old behavior was a hard failure on Create with no preview of
+// the collision. Now it's silently renamed to record_id_2, and this preview shows that.
+const RESERVED_COLUMNS = new Set(["record_id", "synced_at"]);
+const MAX_COLUMN_LEN = 58;
+function resolveColumnKey(labelOrKey: string, index: number, taken: Set<string>): string {
+  let base = toColumn(labelOrKey);
+  if (!/^[a-z]/.test(base)) base = base ? `f_${base}` : `field_${index + 1}`;
+  base = base.slice(0, MAX_COLUMN_LEN);
+  let key = base;
+  let n = 2;
+  while (RESERVED_COLUMNS.has(key) || taken.has(key)) {
+    const suffix = `_${n++}`;
+    key = base.slice(0, MAX_COLUMN_LEN - suffix.length) + suffix;
+  }
+  taken.add(key);
+  return key;
+}
+/** Column keys for a WHOLE field list at once, so duplicates within it resolve consistently. */
+function resolveColumnKeys(fields: { key?: string; label: string }[]): string[] {
+  const taken = new Set<string>();
+  return fields.map((f, i) => resolveColumnKey(f.key || f.label, i, taken));
+}
+
+/** Header names commonly used for an export's unique row identifier, checked in order. */
+const ID_HEADER_HINTS = [
+  /^record\s*id$/i, /^content\s*id$/i, /^.*archer.*id$/i, /^vsr\s*archer\s*id$/i, /^id$/i,
+];
+
 /**
  * Admin Panel → Data Sources.
  * A dataset is a pipe: ONE flat reporting table in MS SQL → ONE table here. Adding one
@@ -67,7 +100,18 @@ export default function DataSourcesTab() {
       // so field labels read nicely and match the row keys we send to the backend.
       const table = parseCsv(await file.text());
       if (table.length < 2) return setErr("No data rows found in the CSV (check the header row).");
-      const headers = table[0].map((h) => h.trim());
+      const rawHeaders = table[0].map((h) => h.trim());
+      // De-duplicate header TEXT before it becomes an object key. Two columns literally
+      // named "Status" (or a blank trailing column from a trailing comma) would otherwise
+      // collide as the same object property below — the second silently overwrites the
+      // first, and both fields end up reading identical data with no error at all.
+      const seenHeader = new Map<string, number>();
+      const headers = rawHeaders.map((h) => {
+        const label = h || "Column";
+        const n = (seenHeader.get(label) ?? 0) + 1;
+        seenHeader.set(label, n);
+        return n === 1 ? label : `${label} (${n})`;
+      });
       const rows: Record<string, string>[] = table.slice(1).map((r) => {
         const o: Record<string, string> = {};
         headers.forEach((h, i) => (o[h] = (r[i] ?? "").trim()));
@@ -76,7 +120,15 @@ export default function DataSourcesTab() {
       const fields: DatasetFieldDef[] = headers.map((h) => ({
         label: h, data_type: guessType(rows.map((r) => r[h])), ...FIELD_FLAGS,
       }));
-      setDraft({ ...draft, fields, sourceTable: "", watermarkColumn: "" }); // CSV dataset has no live feed
+      // Guess the row-identity column from common export header names (VSR Archer ID,
+      // Record Id, ContentId, ...), so re-importing the same file upserts instead of
+      // appending duplicate rows under fresh sequential ids. Left blank if nothing
+      // matches — importRows falls back to numbering rows itself.
+      const idHeader = headers.find((h) => ID_HEADER_HINTS.some((re) => re.test(h)));
+      setDraft({
+        ...draft, fields, sourceTable: "", watermarkColumn: "",
+        keyColumn: idHeader ?? "",
+      }); // CSV dataset has no live feed
       setCsvRows(rows); setCsvName(file.name);
     } catch (e: any) {
       setErr(e.message ?? "Could not read the CSV file.");
@@ -145,7 +197,18 @@ export default function DataSourcesTab() {
         const created = await api.admin.datasets.create(body);
         if (csvRows?.length) {
           const res = await api.admin.datasets.importRows(created.id, csvRows, draft.keyColumn?.trim() || undefined);
-          alert(`Dataset created and ${res.loaded.toLocaleString()} rows imported from ${csvName}.`);
+          // Two rows sharing the same id (a duplicate export row, a history/versioning
+          // row, ...) are not an error — the later one wins, same as re-importing the
+          // same id a second time would — but it does mean fewer rows landed than the
+          // file had, which is worth saying rather than leaving the admin to notice a
+          // row-count mismatch on their own.
+          const notes: string[] = [];
+          if (res.duplicates) notes.push(`${res.duplicates.toLocaleString()} duplicate id${res.duplicates === 1 ? "" : "s"} collapsed (last row for that id was kept)`);
+          if (res.skipped) notes.push(`${res.skipped.toLocaleString()} row${res.skipped === 1 ? "" : "s"} skipped (no usable id)`);
+          alert(
+            `Dataset created and ${res.loaded.toLocaleString()} rows imported from ${csvName}.` +
+            (notes.length ? `\n\n${notes.join("; ")}.` : ""),
+          );
         }
       }
       closeModal();
@@ -284,31 +347,54 @@ export default function DataSourcesTab() {
             )}
 
             <div className="field-label">Fields</div>
-            <div className="records-table" style={{ maxHeight: 260 }}>
-              <table className="findings">
-                <thead>
-                  <tr><th>Field name</th><th>Column</th><th>Type</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {draft.fields.map((f, i) => (
-                    <tr key={i}>
-                      <td><input value={f.label} onChange={(e) => patchField(i, { label: e.target.value })}
-                                 placeholder="e.g. Device Name" /></td>
-                      <td className="muted"><code>{toColumn(f.label) || "—"}</code></td>
-                      <td>
-                        <select value={f.data_type} onChange={(e) => patchField(i, { data_type: e.target.value })}>
-                          {DATA_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </select>
-                      </td>
-                      <td>
-                        <button className="lvl-remove"
-                                onClick={() => setDraft({ ...draft, fields: draft.fields.filter((_, idx) => idx !== i) })}>✕</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {(() => {
+              // Resolved once over the fields that actually HAVE a label — mirroring
+              // exactly what Create sends (it drops blank rows), so a still-empty row
+              // the admin hasn't typed into yet doesn't get a premature "field_3" name
+              // or falsely trip the collision hint below.
+              const labeled = draft.fields.filter((f) => f.label.trim());
+              const labeledKeys = resolveColumnKeys(labeled);
+              const resolvedKeys = draft.fields.map((f) => {
+                if (!f.label.trim()) return "";
+                return labeledKeys[labeled.indexOf(f)];
+              });
+              const renamed = draft.fields.some((f, i) => f.label.trim() && resolvedKeys[i] !== toColumn(f.label));
+              return (
+                <>
+                  {renamed && (
+                    <p className="muted small">
+                      Some column names below were adjusted to avoid clashing with a reserved
+                      name or another field — the field <b>labels</b> you see are unaffected.
+                    </p>
+                  )}
+                  <div className="records-table" style={{ maxHeight: 260 }}>
+                    <table className="findings">
+                      <thead>
+                        <tr><th>Field name</th><th>Column</th><th>Type</th><th></th></tr>
+                      </thead>
+                      <tbody>
+                        {draft.fields.map((f, i) => (
+                          <tr key={i}>
+                            <td><input value={f.label} onChange={(e) => patchField(i, { label: e.target.value })}
+                                       placeholder="e.g. Device Name" /></td>
+                            <td className="muted"><code>{resolvedKeys[i] || "—"}</code></td>
+                            <td>
+                              <select value={f.data_type} onChange={(e) => patchField(i, { data_type: e.target.value })}>
+                                {DATA_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              </select>
+                            </td>
+                            <td>
+                              <button className="lvl-remove"
+                                      onClick={() => setDraft({ ...draft, fields: draft.fields.filter((_, idx) => idx !== i) })}>✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
             <button type="button" className="lvl-add" onClick={() => setDraft({ ...draft, fields: [...draft.fields, emptyField()] })}>
               + Add field
             </button>

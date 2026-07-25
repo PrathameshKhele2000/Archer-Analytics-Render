@@ -595,6 +595,9 @@ export function buildDrill(
 }
 
 
+/** Safety ceiling for a full leaf-records export — a genuine cap, not a sample. */
+export const MAX_EXPORT_RECORDS = 100_000;
+
 /**
  * Underlying records for a chart, filtered by the chart's own filters AND the full
  * drill path (every clicked value). Used to show the raw findings behind the last
@@ -604,12 +607,29 @@ export function buildRecordsQuery(
   spec: ChartSpec,
   catalog: Catalog,
   steps: DrillStep[],
-  limit = 200,
+  opts: { limit?: number; full?: boolean } = {},
 ): { sql: string; params: any[] } {
   const { where, params } = buildChartWhere(spec, catalog, steps);
-  const cappedLimit = Math.min(1000, Math.max(1, limit));
   const recordCols = Object.values(catalog.recordFields).map((c) => `${c.expr} AS ${c.key}`).join(", ");
   const orderBy = recordsOrderBy(catalog);
+
+  if (opts.full) {
+    // Export wants every matching row, not the fast on-screen peek below — order the
+    // real result set and cap it at a generous safety ceiling instead of a small sample.
+    // Slower (this is the plain ORDER BY + LIMIT the comment below avoids for the
+    // on-screen path), but export is an occasional, explicit action rather than a
+    // per-click one, so the tradeoff runs the other way.
+    const sql = `
+      SELECT ${recordCols}
+      ${catalog.baseFrom}
+      ${where}
+      ORDER BY ${orderBy}
+      LIMIT ${MAX_EXPORT_RECORDS}
+    `;
+    return { sql, params };
+  }
+
+  const cappedLimit = Math.min(1000, Math.max(1, opts.limit ?? 200));
 
   // These drill columns are low-cardinality (a handful of distinct values), so neither a
   // bitmap-AND of their indexes (lossy, rechecks millions of rows) nor an `ORDER BY <date>

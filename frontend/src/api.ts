@@ -314,6 +314,12 @@ export interface DashboardWithData {
   widgets: DashboardWidget[];
   data: Record<string, any[]>;
 }
+/** Dashboard structure only — no chart data yet. Renders the page shell instantly;
+ *  each widget's data is then fetched independently (see dashboards.getWidgetData). */
+export interface DashboardShell {
+  dashboard: DashboardMeta;
+  widgets: DashboardWidget[];
+}
 
 export interface ReportMeta {
   id: number; key: string; name: string; description: string | null;
@@ -403,6 +409,11 @@ export const api = {
   dashboards: {
     list: () => get<DashboardMeta[]>("/api/dashboards"),
     get: (key: string) => get<DashboardWithData>(`/api/dashboards/${key}`),
+    /** Structure only, no chart data — renders the page immediately. */
+    getShell: (key: string) => get<DashboardShell>(`/api/dashboards/${key}/shell`),
+    /** One widget's data, fetched independently so a slow chart can't hold up the rest. */
+    getWidgetData: (key: string, widgetId: number) =>
+      get<any[]>(`/api/dashboards/${key}/charts/${widgetId}/data`),
     schema: (source?: string | { view: string }) => {
       const qs = typeof source === "string" ? (source ? `?dataset=${encodeURIComponent(source)}` : "")
         : source ? `?view=${encodeURIComponent(source.view)}` : "";
@@ -435,8 +446,8 @@ export const api = {
       del<void>(`/api/dashboards/${key}/charts/${widgetId}`),
     drill: (key: string, widgetId: number, steps: DrillStep[]) =>
       post<DrillResult>(`/api/dashboards/${key}/charts/${widgetId}/drill`, { steps }),
-    records: (key: string, widgetId: number, steps: DrillStep[]) =>
-      post<{ rows: Finding[] }>(`/api/dashboards/${key}/charts/${widgetId}/records`, { steps }),
+    records: (key: string, widgetId: number, steps: DrillStep[], full?: boolean) =>
+      post<{ rows: Finding[]; truncated: boolean }>(`/api/dashboards/${key}/charts/${widgetId}/records`, { steps, full }),
     exportChart: (body: {
       format: "pdf" | "excel"; title: string; caption?: string;
       headers: string[]; rows: (string | number | null)[][]; image?: string;
@@ -530,7 +541,8 @@ export const api = {
       create: (body: CreateDatasetBody) => post<Dataset>("/api/admin/datasets", body),
       update: (id: number, body: CreateDatasetBody) => patch<Dataset>(`/api/admin/datasets/${id}`, body),
       importRows: (id: number, rows: Record<string, any>[], keyColumn?: string) =>
-        post<{ loaded: number }>(`/api/admin/datasets/${id}/import`, { rows, keyColumn }),
+        post<{ loaded: number; duplicates: number; skipped: number }>(
+          `/api/admin/datasets/${id}/import`, { rows, keyColumn }),
       remove: (id: number) => del<void>(`/api/admin/datasets/${id}`),
     },
     views: {

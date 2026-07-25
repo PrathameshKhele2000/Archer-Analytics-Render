@@ -248,6 +248,11 @@ export class DrillDto {
   @ValidateNested({ each: true })
   @Type(() => DrillStepDto)
   steps!: DrillStepDto[];
+
+  /** True for an export of the leaf records table: the full matching set, not the on-screen sample. */
+  @IsOptional()
+  @IsBoolean()
+  full?: boolean;
 }
 
 /** Drill one step deeper into an UNSAVED spec (live preview in the chart designer). */

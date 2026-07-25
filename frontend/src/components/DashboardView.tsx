@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ChartSpec, DashboardWithData } from "../api";
+import { api, ChartSpec, DashboardShell } from "../api";
 import { AgingStack, BusinessUnitBars, MonthlyTrend, SeverityDonut } from "./Charts";
 import ChartEditor from "./ChartEditor";
 import DrilldownChart from "./DrilldownChart";
@@ -27,13 +27,32 @@ const fmtKpi = (v: unknown) =>
   v == null ? "—" : typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(v);
 
 export default function DashboardView({ dashboardKey, canEdit, viewSources }: { dashboardKey: string; canEdit?: boolean; viewSources?: { key: string; name: string }[] }) {
-  const [payload, setPayload] = useState<DashboardWithData | null>(null);
+  const [shell, setShell] = useState<DashboardShell | null>(null);
+  const [data, setData] = useState<Record<string, any[]>>({});
+  // Widget ids whose OWN data request hasn't resolved yet. The shell (titles, panel
+  // grid, captions) renders as soon as getShell() returns; each widget then fetches its
+  // own data independently, so one heavy chart's query time is contained to that one
+  // panel instead of blanking the whole dashboard until the slowest widget finishes.
+  const [pending, setPending] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<null | { widgetId: number; title: string; spec: ChartSpec }>(null);
   const [adding, setAdding] = useState(false);
 
   const load = useCallback(() => {
-    api.dashboards.get(dashboardKey).then(setPayload).catch((e) => setError(String(e.message ?? e)));
+    setError(null);
+    api.dashboards.getShell(dashboardKey).then((s) => {
+      setShell(s);
+      setData({});
+      setPending(new Set(s.widgets.map((w) => w.id)));
+      // Fired off in parallel, not awaited as a batch — each panel updates the moment
+      // ITS OWN request lands, rather than everything waiting for Promise.all to settle.
+      s.widgets.forEach((w) => {
+        api.dashboards.getWidgetData(dashboardKey, w.id)
+          .then((rows) => setData((d) => ({ ...d, [w.key]: rows })))
+          .catch((e) => { console.error(e); setData((d) => ({ ...d, [w.key]: [] })); })
+          .finally(() => setPending((p) => { if (!p.has(w.id)) return p; const n = new Set(p); n.delete(w.id); return n; }));
+      });
+    }).catch((e) => setError(String(e.message ?? e)));
   }, [dashboardKey]);
 
   useEffect(() => {
@@ -45,9 +64,9 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
   }, [load]);
 
   if (error) return <div className="loading">Could not load dashboard: {error}</div>;
-  if (!payload) return <div className="loading">loading dashboard…</div>;
+  if (!shell) return <div className="loading">loading dashboard…</div>;
 
-  const { widgets, data } = payload;
+  const { widgets } = shell;
 
   const removeChart = async (widgetId: number) => {
     if (!confirm("Remove this chart?")) return;
@@ -87,7 +106,7 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
             return (
               <div className="kpi" key={w.id}>
                 <div className="label">{spec.caption || w.title}</div>
-                <div className="value">{fmtKpi(data[w.key]?.[0]?.y)}</div>
+                <div className="value">{pending.has(w.id) ? "…" : fmtKpi(data[w.key]?.[0]?.y)}</div>
                 {canEdit && (
                   <div className="kpi-actions">
                     <button title="Edit" onClick={() => setEditing({ widgetId: w.id, title: w.title, spec })}>✎</button>
@@ -119,7 +138,9 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
                     </div>
                   )}
                 </div>
-                {isBuilt && w.widget_type === "table" ? (
+                {pending.has(w.id) ? (
+                  <div className="loading">loading chart…</div>
+                ) : isBuilt && w.widget_type === "table" ? (
                   <RecordsChart widget={w} rows={data[w.key] ?? NO_ROWS} />
                 ) : isBuilt ? (
                   <DrilldownChart dashboardKey={dashboardKey} widget={w} baseRows={data[w.key] ?? NO_ROWS} />

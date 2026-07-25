@@ -148,9 +148,33 @@ export class DashboardController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: DrillDto,
   ) {
-    return this.dashboards.chartRecords(key, widgetId, user, dto.steps);
+    return this.dashboards.chartRecords(key, widgetId, user, dto.steps, dto.full);
   }
 
+  /**
+   * Dashboard structure only (no chart data) — paints the page shell immediately.
+   * Must be registered BEFORE the plain ":key" route below, or Nest would try to match
+   * "shell" itself as a dashboard key.
+   */
+  @Get(":key/shell")
+  @Permissions("dashboard:read")
+  getShell(@Param("key") key: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.dashboards.getShell(key, user);
+  }
+
+  /** One widget's data, fetched independently so a slow chart can't hold up the rest. */
+  @Get(":key/charts/:widgetId/data")
+  @Permissions("dashboard:read")
+  getWidgetData(
+    @Param("key") key: string,
+    @Param("widgetId", ParseIntPipe) widgetId: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.dashboards.getWidgetData(key, widgetId, user);
+  }
+
+  /** Whole dashboard in one call (structure + every widget's data) — kept for callers
+   *  that need a single all-at-once snapshot; the interactive view no longer uses this. */
   @Get(":key")
   @Permissions("dashboard:read")
   getOne(@Param("key") key: string, @CurrentUser() user: AuthenticatedUser) {

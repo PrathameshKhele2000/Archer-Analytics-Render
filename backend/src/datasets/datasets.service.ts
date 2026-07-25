@@ -10,6 +10,7 @@ import {
   DatasetRow,
   FieldSpec,
   normalizeKey,
+  resolveColumnKey,
   sqlTypeFor,
   targetTableFor,
 } from "./dataset.entity";
@@ -40,14 +41,19 @@ export class DatasetsService {
     return rows;
   }
 
-  /** Normalize + validate a submitted field list; throws 400 on anything unusable. */
+  /**
+   * Normalize a submitted field list into safe, unique column names. Column-name
+   * collisions (a CSV header like "Record Id" normalizing to our reserved `record_id`,
+   * two columns both called "Status", a header of pure symbols) are resolved by
+   * renaming rather than rejected — a client's raw CSV headers should never be able to
+   * abort dataset creation. Only a genuinely empty field list, or an unrecognised data
+   * type, is still a hard error.
+   */
   private resolveFields(dto: CreateDatasetDto): FieldSpec[] {
     if (!dto.fields?.length) throw new BadRequestException("Add at least one field");
-    const seen = new Set<string>();
+    const taken = new Set<string>();
     return dto.fields.map((f, i) => {
-      const key = assertColumn(normalizeKey(f.key || f.label));
-      if (seen.has(key)) throw new BadRequestException(`Duplicate column '${key}'`);
-      seen.add(key);
+      const key = resolveColumnKey(f.key || f.label, i, taken);
       return {
         key,
         label: (f.label || f.key || key).trim(),
@@ -170,16 +176,30 @@ export class DatasetsService {
       );
       const existing = existingAll.filter((f) => f.key !== "record_id");
       const byKey = new Map(existing.map((f) => [f.key, f]));
+      // Keys already spoken for: every existing field's key (never renamed here — a
+      // rename would need an ALTER TABLE RENAME COLUMN this path doesn't do, and would
+      // break the byKey lookup below) plus our own reserved names.
+      const taken = new Set(existing.map((f) => f.key));
+      let idx = 0;
       const desired = dto.fields
         .filter((f) => (f.label ?? "").trim() && (f.key ?? "") !== "record_id")
-        .map((f) => ({
-          key: assertColumn(f.key?.trim() || normalizeKey(f.label)),
-          label: f.label.trim(),
-          data_type: assertDataType(f.data_type),
-          is_dimension: !!f.is_dimension, is_measurable: !!f.is_measurable, is_searchable: !!f.is_searchable,
-        }));
-      const seen = new Set<string>();
-      for (const f of desired) { if (seen.has(f.key)) throw new BadRequestException(`Duplicate column '${f.key}'`); seen.add(f.key); }
+        .map((f) => {
+          const explicitKey = f.key?.trim();
+          // An EXISTING field keeps its exact key — it identifies the column to alter,
+          // not just a name to validate — so it is never subject to collision renaming.
+          // Only a genuinely NEW field (no key yet, e.g. added by typing a label into
+          // the edit form) needs a fresh, collision-safe key resolved for it.
+          const key = explicitKey && byKey.has(explicitKey)
+            ? assertColumn(explicitKey)
+            : resolveColumnKey(explicitKey || f.label, idx, taken);
+          idx++;
+          return {
+            key,
+            label: f.label.trim(),
+            data_type: assertDataType(f.data_type),
+            is_dimension: !!f.is_dimension, is_measurable: !!f.is_measurable, is_searchable: !!f.is_searchable,
+          };
+        });
 
       for (let i = 0; i < desired.length; i++) {
         const f = desired[i];
@@ -231,7 +251,9 @@ export class DatasetsService {
    * header it was created from), converted to the column's type, and upserted on
    * record_id. Column names come from the registry (validated), so it's injection-safe.
    */
-  async importRows(id: number, rows: Record<string, any>[], keyColumn?: string): Promise<{ loaded: number }> {
+  async importRows(
+    id: number, rows: Record<string, any>[], keyColumn?: string,
+  ): Promise<{ loaded: number; duplicates: number; skipped: number }> {
     const { rows: dsRows } = await this.db.query<DatasetRow>(`SELECT * FROM dataset WHERE id = $1`, [id]);
     const dataset = dsRows[0];
     if (!dataset) throw new NotFoundException("Dataset not found");
@@ -263,22 +285,43 @@ export class DatasetsService {
       return String(v); // text / date / timestamp — Postgres parses date/timestamp strings
     };
 
+    // Resolve every row's id FIRST, across the WHOLE file, before any batching. A
+    // single INSERT ... ON CONFLICT DO UPDATE statement cannot touch the same key
+    // twice — Postgres rejects the entire statement with "ON CONFLICT DO UPDATE
+    // command cannot affect row a second time" — so two source rows that happen to
+    // share an id (a real-world CSV export artifact: a re-exported date range, a
+    // history/versioning row, or just a duplicate) used to take out the WHOLE 500-row
+    // batch containing them, silently dropping hundreds of otherwise-good rows and
+    // surfacing only as an opaque 500 to the admin.
+    //
+    // A Map keyed by id naturally resolves this exactly the way a second CSV import
+    // of the same key already behaves (upsert = last write wins): iterating the file
+    // in order and re-setting the same key just replaces the stored row, so by
+    // construction no key can ever appear twice in what gets batched below.
+    let skipped = 0; // rows with no usable id (only possible via a bad keyColumn value)
+    const byId = new Map<number, Record<string, any>>();
+    rows.forEach((row, i) => {
+      const rid = keyColumn && row[keyColumn] != null && String(row[keyColumn]).trim() !== ""
+        ? parseInt(String(row[keyColumn]).replace(/[^\d-]/g, ""), 10)
+        : i + 1; // no id column -> sequential row number (already unique per file)
+      if (Number.isNaN(rid)) { skipped++; return; }
+      byId.set(rid, row);
+    });
+    const duplicates = rows.length - skipped - byId.size;
+    const deduped = [...byId.entries()];
+
     let loaded = 0;
     // Upsert in batches to keep statements a sensible size.
-    for (let start = 0; start < rows.length; start += 500) {
-      const batch = rows.slice(start, start + 500);
+    for (let start = 0; start < deduped.length; start += 500) {
+      const batch = deduped.slice(start, start + 500);
       const params: any[] = [];
       const tuples: string[] = [];
-      batch.forEach((row, i) => {
-        const rid = keyColumn && row[keyColumn] != null && String(row[keyColumn]).trim() !== ""
-          ? parseInt(String(row[keyColumn]).replace(/[^\d-]/g, ""), 10)
-          : start + i + 1; // no id column -> sequential row number
-        if (Number.isNaN(rid)) return;
+      for (const [rid, row] of batch) {
         const vals = [rid, ...fields.map((f) => convert(row[f.label], f.data_type))];
         const base = params.length;
         params.push(...vals);
         tuples.push(`(${vals.map((_, j) => `$${base + j + 1}`).join(",")})`);
-      });
+      }
       if (!tuples.length) continue;
       const updates = fields.map((f) => `${f.key} = EXCLUDED.${f.key}`).join(", ");
       await this.db.query(
@@ -288,8 +331,12 @@ export class DatasetsService {
       );
       loaded += tuples.length;
     }
-    this.log.log(`imported ${loaded} rows into ${dataset.target_table} from CSV`);
-    return { loaded };
+    this.log.log(
+      `imported ${loaded} rows into ${dataset.target_table} from CSV` +
+      (duplicates ? ` (${duplicates} duplicate id(s) collapsed, last occurrence kept)` : "") +
+      (skipped ? ` (${skipped} row(s) skipped: no usable id)` : ""),
+    );
+    return { loaded, duplicates, skipped };
   }
 
   /**
@@ -306,6 +353,28 @@ export class DatasetsService {
     }
     if (!/^ds_[a-z0-9_]+$/.test(dataset.target_table)) {
       throw new BadRequestException(`Refusing to drop '${dataset.target_table}': not a generated dataset table`);
+    }
+    // Charts built against this dataset (directly or through a view) each get their own
+    // mv_chart_<widgetId> matview (see DashboardRepository.createChartMatview). Postgres
+    // refuses to drop a table while any matview still depends on it — that used to
+    // surface as an opaque 500 on this endpoint. Find those matviews via pg_depend
+    // (works regardless of whether the chart references the dataset directly or via a
+    // view built on it) and drop them first, exactly as chart/dashboard deletion already
+    // does per-widget; the chart itself is left in place but falls back to its "no
+    // matview yet" behavior, matching what already happens for a brand-new chart.
+    const { rows: dependentMatviews } = await this.db.query<{ relname: string }>(
+      `SELECT DISTINCT dependent_view.relname
+         FROM pg_depend
+         JOIN pg_rewrite ON pg_depend.objid = pg_rewrite.oid
+         JOIN pg_class dependent_view ON pg_rewrite.ev_class = dependent_view.oid
+         JOIN pg_class source_table ON pg_depend.refobjid = source_table.oid
+        WHERE source_table.relname = $1 AND dependent_view.relkind = 'm'`,
+      [dataset.target_table],
+    );
+    for (const { relname } of dependentMatviews) {
+      await this.db.query(`DROP MATERIALIZED VIEW IF EXISTS ${relname}`);
+      const widgetId = /^mv_chart_(\d+)(?:_build)?$/.exec(relname)?.[1];
+      if (widgetId) await this.db.query(`DELETE FROM chart_matview_state WHERE widget_id = $1`, [Number(widgetId)]);
     }
     await this.db.query(`DROP TABLE IF EXISTS ${dataset.target_table}`);
     await this.db.query(`DELETE FROM field_mapping WHERE source = $1`, [dataset.key]);
