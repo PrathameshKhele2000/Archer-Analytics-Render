@@ -346,7 +346,8 @@
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT code FROM permissions WHERE code LIKE 'sync%' OR code LIKE 'audit%' ORDER BY code;\")",
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT count\\(*\\) FROM dataset_sync_state; SELECT count\\(*\\) FROM dataset_sync_history; SELECT count\\(*\\) FROM audit_log;\")",
       "Bash(curl -s -X POST http://localhost:8000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
-      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"\\\\d dataset_sync_history\")"
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"\\\\d dataset_sync_history\")",
+      "Bash(grep -rn \"buildCreateTableSql\\\\|CREATE TABLE\\\\|mv_chart_\\\\|CREATE MATERIALIZED VIEW\\\\|ds_\\\\${\" --include=\"*.ts\")"
     ]
   }
 }

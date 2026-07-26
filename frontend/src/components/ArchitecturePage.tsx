@@ -2,6 +2,8 @@
  * Client-facing architecture, ETL & data-flow page. Reachable from the login screen
  * and from the top nav after login. Pure presentational — no data fetching.
  */
+import { useState } from "react";
+import DocumentationPage from "./DocumentationPage";
 
 const HIGHLIGHTS = [
   { k: "Read-only", v: "never writes back to Archer" },
@@ -70,11 +72,18 @@ const CAPABILITIES = [
 
 export default function ArchitecturePage({ onBack, authed }: { onBack: () => void; authed: boolean }) {
   const back = authed ? "← Back to app" : "← Back to sign in";
+  const [showDocs, setShowDocs] = useState(false);
+
+  if (showDocs) return <DocumentationPage onBack={() => setShowDocs(false)} />;
+
   return (
     <div className="arch-shell">
       <div className="arch-topbar">
         <h1>Archer Analytics — System Architecture</h1>
-        <button className="arch-back" onClick={onBack}>{back}</button>
+        <div className="arch-topbar-actions">
+          <button className="arch-back primary" onClick={() => setShowDocs(true)}>📄 Full Documentation</button>
+          <button className="arch-back" onClick={onBack}>{back}</button>
+        </div>
       </div>
 
       <p className="arch-lead">
