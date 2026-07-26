@@ -186,7 +186,8 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
   background: var(--accent); color: var(--surface); border-color: var(--accent);
 }
 /* ---- Virtualized register table ---- */
-.vtable { overflow-x: auto; border: 1px solid var(--hairline); border-radius: 3px; }
+.vtable { position: relative; }
+.vtable-scroll { overflow-x: auto; border: 1px solid var(--hairline); border-radius: 3px 3px 0 0; }
 .vt-head { display: grid; position: sticky; top: 0; z-index: 2; background: var(--surface);
   border-bottom: 1px solid var(--hairline); }
 .vt-head .vt-cell { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
@@ -198,6 +199,17 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
 .vt-filter input { width: 100%; font-family: var(--font-sans); font-size: 11px; padding: 4px 6px;
   border: 1px solid var(--hairline); border-radius: 3px; background: var(--surface); color: var(--ink); }
 .vt-body { overflow-y: auto; }
+/* Thin duplicate scrollbar, fixed to the viewport bottom while the table is in view
+   (see VirtualTable.tsx). `position: fixed` rather than `sticky`: an ancestor `.panel`
+   sets `overflow: hidden` (to force wide content to scroll inside .vtable-scroll rather
+   than stretch the page), which also redefines sticky's containing block to that panel
+   instead of the viewport — fixed positioning isn't affected by an ancestor's overflow,
+   only by transforms/filters, none of which are in play here. Left/width are computed
+   in JS from the real scroll container's current bounding rect. Kept in lockstep with
+   the real scrollbar via scrollLeft sync. */
+.vt-hscroll-fixed { position: fixed; bottom: 0; overflow-x: auto; overflow-y: hidden;
+  height: 14px; background: var(--surface); border: 1px solid var(--hairline); border-bottom: none;
+  border-radius: 3px 3px 0 0; z-index: 20; }
 
 /* Global search box */
 .search-box { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--hairline);
@@ -303,9 +315,17 @@ button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color
 .dash-toolbar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 .dash-toolbar button {
   font-family: var(--font-sans); font-size: 12px; border: 1px solid var(--hairline); background: transparent;
-  color: var(--ink); padding: 6px 12px; border-radius: 3px; cursor: pointer;
+  color: var(--ink); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-weight: 500;
 }
 .dash-toolbar button:hover { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+/* "+ Add chart" / "+ New dashboard": the toolbar's main actions, filled so they read as
+   the primary thing to do here rather than blending into Delete. */
+.dash-toolbar button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.dash-toolbar button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* "Delete dashboard": destructive, so it's tinted red rather than sharing the accent
+   color with the actions that create or add to a dashboard. */
+.dash-toolbar button.danger-outline { color: #b42318; border-color: #f3b9b2; background: transparent; }
+.dash-toolbar button.danger-outline:hover { background: #fdecea; color: #b42318; border-color: #e88b80; }
 
 .builder { margin-top: 20px; }
 .builder-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
@@ -569,25 +589,20 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 .report-tools { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .report-head h2 { padding: 0; }
 
-/* ---- DataSets tab: dataset picker cards ---- */
-.ds-picker { display: flex; gap: 12px; flex-wrap: wrap; padding: 16px;
-  border-bottom: 1px solid var(--hairline); }
-.ds-card { display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
-  min-width: 240px; max-width: 340px; flex: 1 1 240px; padding: 12px 14px; text-align: left;
-  background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px;
-  cursor: pointer; transition: border-color .15s ease, background .15s ease; }
-.ds-card:hover { border-color: var(--accent); background: var(--accent-soft); }
-.ds-card.active { border-color: var(--accent); background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent); }
-.ds-card-name { font-weight: 600; font-size: 14px; color: var(--ink); }
-.ds-card-desc { font-size: 12px; color: var(--muted); line-height: 1.35; }
-.ds-card-stats { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
-.ds-card-stats strong { color: var(--ink); font-weight: 600; }
-.ds-card-map { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--muted);
-  overflow-wrap: anywhere; }
+/* ---- DataSets / Views tabs: dataset picker, now a dropdown at the far left of the
+   search-bar row instead of a row of cards above the table. Carries the same info a
+   card used to (description, row/column counts, source→target mapping). ---- */
+.ds-select-block { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.ds-select-block select { font-family: var(--font-sans); font-size: 14px; font-weight: 600;
+  padding: 6px 10px; border: 1px solid var(--hairline); border-radius: 4px;
+  background: var(--surface); color: var(--ink); max-width: 280px; }
+.ds-select-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; color: var(--muted); }
+.ds-select-desc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-select-stats strong { color: var(--ink); font-weight: 600; }
+.ds-select-sep { margin: 0 6px; }
+.ds-select-map { font-family: var(--font-mono, monospace); font-size: 11px; }
 .ds-arrow { color: var(--accent); }
-.ds-table-name { margin-left: 10px; font-size: 12px; font-weight: 400; color: var(--muted);
-  font-family: var(--font-mono, monospace); }
 
 /* ---- View editor: "Rows to show" (All / top N) ---- */
 .row-limit { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 0 2px; }
@@ -809,10 +824,9 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
   .fld.inline { flex-direction: column; align-items: stretch; }
   .grant-cols { grid-template-columns: 1fr; }
 
-  /* Dataset cards: one per row so the stats stay readable */
-  .ds-picker { padding: 12px; gap: 8px; }
-  .ds-card { min-width: 0; max-width: none; flex: 1 1 100%; }
-  .ds-table-name { display: block; margin-left: 0; margin-top: 2px; }
+  /* Dataset selector: stack the dropdown and its info line so neither gets squeezed */
+  .ds-select-block { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .ds-select-block select { max-width: none; width: 100%; }
   .search-box { flex: 1 1 100%; }
   .search-box input { width: 100%; }
   .row-actions { flex-wrap: wrap; }

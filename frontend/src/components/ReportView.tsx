@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, FieldsCatalog, FilterCondition, Page, ReportConfig } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, FieldsCatalog, FilterCondition, Page, ReportConfig, ReportMeta } from "../api";
 import ExportMenu from "./ExportMenu";
 import FilterConditions from "./FilterConditions";
 import VirtualTable, { VCol } from "./VirtualTable";
@@ -25,7 +25,9 @@ function renderCell(key: string, row: any) {
 
 /** Renders any registered report. Columns come from report config; filtering is a dynamic
  *  field/operator/value condition builder backed by the server-side filter engine. */
-export default function ReportView({ reportKey }: { reportKey: string }) {
+export default function ReportView({
+  reportKey, reports, onPick,
+}: { reportKey: string; reports?: ReportMeta[]; onPick?: (key: string) => void }) {
   const [config, setConfig] = useState<ReportConfig | null>(null);
   const [catalog, setCatalog] = useState<FieldsCatalog | null>(null);
   const [data, setData] = useState<Page | null>(null);
@@ -66,8 +68,16 @@ export default function ReportView({ reportKey }: { reportKey: string }) {
     return q;
   }, [page, pageSize, sort, order, applied, dSearch, dCols]);
 
+  // Paging/filtering fires a new request before the previous one resolves; a slow
+  // earlier response (cache miss) landing after a fast later one (cache hit) would
+  // otherwise overwrite the current page with stale data. Only the most recent request
+  // in flight is allowed to update state.
+  const requestSeq = useRef(0);
   useEffect(() => {
-    api.reports.data(reportKey, query).then(setData).catch((e) => console.error(e));
+    const seq = ++requestSeq.current;
+    api.reports.data(reportKey, query)
+      .then((res) => { if (seq === requestSeq.current) setData(res); })
+      .catch((e) => { if (seq === requestSeq.current) console.error(e); });
   }, [reportKey, query]);
 
   const applyFilters = () => { setApplied({ conditions, logic }); setPage(1); setShowFilters(false); };
@@ -98,7 +108,16 @@ export default function ReportView({ reportKey }: { reportKey: string }) {
   return (
     <section className="panel report" aria-label={config?.report.name ?? "Report"}>
       <div className="report-head">
-        <h2>{config?.report.name ?? "Report"}</h2>
+        {reports && reports.length > 1 && onPick ? (
+          <div className="ds-select-block">
+            <select value={reportKey} onChange={(e) => onPick(e.target.value)} aria-label="Choose view">
+              {reports.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
+            </select>
+            {config?.report.description && <span className="ds-select-info"><span className="ds-select-desc">{config.report.description}</span></span>}
+          </div>
+        ) : (
+          <h2>{config?.report.name ?? "Report"}</h2>
+        )}
         <div className="report-tools">
           <div className="search-box">
             <span className="search-icon">⌕</span>

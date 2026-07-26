@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
 import { api, ChartSpec, DashboardShell } from "../api";
 import { AgingStack, BusinessUnitBars, MonthlyTrend, SeverityDonut } from "./Charts";
 import ChartEditor from "./ChartEditor";
@@ -26,7 +26,15 @@ function LegacyChart({ type, rows }: { type: string; rows: any[] }) {
 const fmtKpi = (v: unknown) =>
   v == null ? "—" : typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(v);
 
-export default function DashboardView({ dashboardKey, canEdit, viewSources }: { dashboardKey: string; canEdit?: boolean; viewSources?: { key: string; name: string }[] }) {
+/** Lets the parent toolbar's own "+ Add chart" button (sitting beside the dashboard
+ *  picker) open this dashboard's chart editor, without lifting all of DashboardView's
+ *  add/edit state up into every caller. */
+export interface DashboardViewHandle {
+  openAddChart: () => void;
+}
+
+export default forwardRef<DashboardViewHandle, { dashboardKey: string; canEdit?: boolean; viewSources?: { key: string; name: string }[] }>(
+  function DashboardView({ dashboardKey, canEdit, viewSources }, ref) {
   const [shell, setShell] = useState<DashboardShell | null>(null);
   const [data, setData] = useState<Record<string, any[]>>({});
   // Widget ids whose OWN data request hasn't resolved yet. The shell (titles, panel
@@ -37,6 +45,7 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<null | { widgetId: number; title: string; spec: ChartSpec }>(null);
   const [adding, setAdding] = useState(false);
+  useImperativeHandle(ref, () => ({ openAddChart: () => setAdding(true) }), []);
 
   const load = useCallback(() => {
     setError(null);
@@ -93,12 +102,6 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
 
   return (
     <>
-      {canEdit && (
-        <div className="dash-toolbar">
-          <button onClick={() => setAdding(true)}>+ Add chart</button>
-        </div>
-      )}
-
       {kpiWidgets.length > 0 && (
         <div className="kpis">
           {kpiWidgets.map((w) => {
@@ -160,4 +163,4 @@ export default function DashboardView({ dashboardKey, canEdit, viewSources }: { 
       )}
     </>
   );
-}
+});

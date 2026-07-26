@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, DashboardMeta, ReportMeta, setUnauthorizedHandler } from "./api";
 import { consumeSsoHashTokens, hasPermission, SafeUser, tokenStore } from "./auth";
 import Login from "./components/Login";
+import type { DashboardViewHandle } from "./components/DashboardView";
 
 // Loaded on demand: these pull in the heavy chart library (~1 MB). Keeping them out
 // of the initial bundle means the login screen and first paint stay small and fast.
@@ -25,6 +26,7 @@ export default function App() {
   const [dashboards, setDashboards] = useState<DashboardMeta[]>([]);
   const [reports, setReports] = useState<ReportMeta[]>([]);
   const [activeDashboard, setActiveDashboard] = useState<string | null>(null);
+  const dashboardRef = useRef<DashboardViewHandle>(null);
   const [activeReport, setActiveReport] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
   const [showArch, setShowArch] = useState(false);
@@ -165,14 +167,17 @@ export default function App() {
                 </select>
               )}
               <div className="dash-toolbar-right">
+                {activeDashboard && canEditCurrent && (
+                  <button className="primary" onClick={() => dashboardRef.current?.openAddChart()}>+ Add chart</button>
+                )}
                 {canCreateDashboards && (
                   <button onClick={() => setBuilding(true)}>+ New dashboard</button>
                 )}
-                {ownsCurrent && <button onClick={deleteCurrent}>Delete dashboard</button>}
+                {ownsCurrent && <button className="danger-outline" onClick={deleteCurrent}>Delete dashboard</button>}
               </div>
             </div>
             {activeDashboard ? (
-              <DashboardView key={activeDashboard} dashboardKey={activeDashboard} canEdit={canEditCurrent} />
+              <DashboardView ref={dashboardRef} key={activeDashboard} dashboardKey={activeDashboard} canEdit={canEditCurrent} />
             ) : (
               <div className="loading">No dashboards yet. {canCreateDashboards ? "Create one to get started." : ""}</div>
             )}
@@ -185,16 +190,11 @@ export default function App() {
       {section === "datasets" && isSystemAdmin && <DataSetsTab />}
 
       {section === "reports" && (
-        <>
-          {reports.length > 1 && (
-            <div className="dash-toolbar">
-              <select value={activeReport ?? ""} onChange={(e) => setActiveReport(e.target.value)}>
-                {reports.map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}
-              </select>
-            </div>
-          )}
-          {activeReport ? <ReportView reportKey={activeReport} /> : <div className="loading">No reports available.</div>}
-        </>
+        activeReport ? (
+          <ReportView reportKey={activeReport} reports={reports} onPick={setActiveReport} />
+        ) : (
+          <div className="loading">No reports available.</div>
+        )
       )}
 
       {section === "admin" && <AdminPanel permissions={user.permissions} currentUserId={user.id} />}

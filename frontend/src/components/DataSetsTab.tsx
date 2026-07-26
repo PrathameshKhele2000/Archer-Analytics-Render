@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, DatasetColumn, DatasetSchema, DatasetSummary, FilterCondition, Page } from "../api";
 import ExportMenu from "./ExportMenu";
 import FilterConditions from "./FilterConditions";
@@ -29,25 +29,35 @@ function whenText(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? "never" : d.toLocaleString();
 }
 
-/** One selectable dataset, summarising what the mapping produced. */
-function DatasetCard({ ds, active, onPick }: { ds: DatasetSummary; active: boolean; onPick: () => void }) {
+/** Dataset picker + the same summary a card used to show (description, row/column
+ *  counts, source→target mapping), now a dropdown so it sits inline with the search
+ *  bar instead of a whole row of cards above the table. */
+function DatasetSelect({
+  datasets, active, onPick,
+}: { datasets: DatasetSummary[]; active: DatasetSummary; onPick: (key: string) => void }) {
   return (
-    <button className={`ds-card${active ? " active" : ""}`} onClick={onPick} aria-pressed={active}>
-      <span className="ds-card-name">{ds.name}</span>
-      {ds.description && <span className="ds-card-desc">{ds.description}</span>}
-      <span className="ds-card-stats">
-        <span><strong>{ds.rowCountEstimated ? "~" : ""}{nf.format(ds.rowCount)}</strong> rows</span>
-        <span><strong>{nf.format(ds.columnCount)}</strong> columns</span>
+    <div className="ds-select-block">
+      <select value={active.key} onChange={(e) => onPick(e.target.value)} aria-label="Choose dataset">
+        {datasets.map((d) => <option key={d.key} value={d.key}>{d.name}</option>)}
+      </select>
+      <span className="ds-select-info">
+        <span className="ds-select-stats">
+          <strong>{active.rowCountEstimated ? "~" : ""}{nf.format(active.rowCount)}</strong> rows
+          <span className="ds-select-sep">·</span>
+          <strong>{nf.format(active.columnCount)}</strong> columns
+        </span>
+        <span className="ds-select-map">
+          {active.sourceTable ? <>{active.sourceTable} <span className="ds-arrow"></span> </> : null}
+        </span>
       </span>
-      <span className="ds-card-map">
-        {ds.sourceTable ? <>{ds.sourceTable} <span className="ds-arrow">→</span> {ds.targetTable}</> : ds.targetTable}
-      </span>
-    </button>
+    </div>
   );
 }
 
 /** The full table for one dataset: every mapped column, every row. */
-function DatasetTable({ dataset }: { dataset: DatasetSummary }) {
+function DatasetTable({
+  dataset, datasets, onPick,
+}: { dataset: DatasetSummary; datasets: DatasetSummary[]; onPick: (key: string) => void }) {
   const [schema, setSchema] = useState<DatasetSchema | null>(null);
   const [data, setData] = useState<Page | null>(null);
   const [page, setPage] = useState(1);
@@ -93,10 +103,18 @@ function DatasetTable({ dataset }: { dataset: DatasetSummary }) {
     return q;
   }, [page, pageSize, sort, order, applied, dSearch, dCols]);
 
+  // Paging/filtering fires a new request before the previous one resolves; a slow
+  // earlier response (cache miss) landing after a fast later one (cache hit) would
+  // otherwise overwrite the current page with stale data. Only the most recent request
+  // in flight is allowed to update state.
+  const requestSeq = useRef(0);
   useEffect(() => {
     if (!schema) return;
+    const seq = ++requestSeq.current;
     setError(null);
-    api.datasets.data(dataset.key, query).then(setData).catch((e) => setError(e.message ?? "Query failed"));
+    api.datasets.data(dataset.key, query)
+      .then((res) => { if (seq === requestSeq.current) setData(res); })
+      .catch((e) => { if (seq === requestSeq.current) setError(e.message ?? "Query failed"); });
   }, [dataset.key, schema, query]);
 
   const numericKeys = useMemo(
@@ -138,10 +156,7 @@ function DatasetTable({ dataset }: { dataset: DatasetSummary }) {
   return (
     <>
       <div className="report-head">
-        <h2>
-          {schema.name}
-          <span className="ds-table-name">{schema.table} · {schema.columns.length} columns</span>
-        </h2>
+        <DatasetSelect datasets={datasets} active={dataset} onPick={onPick} />
         <div className="report-tools">
           <div className="search-box">
             <span className="search-icon">⌕</span>
@@ -257,12 +272,7 @@ export default function DataSetsTab() {
 
   return (
     <section className="panel report" aria-label="Data sets">
-      <div className="ds-picker">
-        {datasets.map((d) => (
-          <DatasetCard key={d.key} ds={d} active={d.key === activeKey} onPick={() => setActiveKey(d.key)} />
-        ))}
-      </div>
-      {active ? <DatasetTable key={active.key} dataset={active} /> : null}
+      {active ? <DatasetTable key={active.key} dataset={active} datasets={datasets} onPick={setActiveKey} /> : null}
     </section>
   );
 }

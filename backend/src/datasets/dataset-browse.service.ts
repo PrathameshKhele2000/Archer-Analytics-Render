@@ -4,7 +4,7 @@ import { CacheService } from "../cache/cache.service";
 import { DbService } from "../database/db.service";
 import { ExportService } from "../reports/export.service";
 import { ReportContext } from "../reports/report.entity";
-import { FindingsFilter, FindingsQuery, ReportsRepository } from "../reports/reports.repository";
+import { ESTIMATE_ABOVE_ROWS, FindingsFilter, FindingsQuery, ReportsRepository } from "../reports/reports.repository";
 import { CatalogService } from "./catalog.service";
 
 export interface DatasetSummary {
@@ -81,7 +81,9 @@ export class DatasetBrowseService {
   /**
    * Row count for the card. An exact count(*) scans the whole table (~6s at 10M rows)
    * and this runs for every dataset on tab open, so use the planner's estimate once a
-   * table is big enough for the difference to matter.
+   * table is big enough for the difference to matter. Same threshold as the paginated
+   * table's own count (ReportsRepository.countFindings), so a dataset doesn't show
+   * "~estimated" on the card but an exact count once you open its table, or vice versa.
    */
   private async countRows(table: string): Promise<{ total: number; estimated: boolean }> {
     const { rows } = await this.db.query<{ n: string }>(
@@ -89,7 +91,7 @@ export class DatasetBrowseService {
       [table],
     );
     const estimate = Number(rows[0]?.n ?? -1);
-    if (estimate > 100_000) return { total: estimate, estimated: true };
+    if (estimate >= ESTIMATE_ABOVE_ROWS) return { total: estimate, estimated: true };
     // Small table (or never analyzed): an exact count is cheap and worth showing.
     const exact = await this.db.query<{ n: string }>(`SELECT count(*)::bigint AS n FROM ${table}`);
     return { total: Number(exact.rows[0].n), estimated: false };

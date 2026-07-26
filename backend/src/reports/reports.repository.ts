@@ -91,6 +91,14 @@ function whereFor(ctx: ReportContext, f: FindingsFilter): { where: string; param
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
+/**
+ * Row-count threshold above which an exact count(*) is skipped in favor of Postgres'
+ * own planner estimate. Shared with DatasetBrowseService so a dataset shows the same
+ * "exact vs ~estimated" behavior on the DataSets tab as it does on a Views/report page
+ * of the same size — the two used to disagree (100k vs 2M) for no reason.
+ */
+export const ESTIMATE_ABOVE_ROWS = 2_000_000;
+
 @Injectable()
 export class ReportsRepository extends BaseRepository<ReportRow> {
   protected readonly table = "reports";
@@ -191,7 +199,6 @@ export class ReportsRepository extends BaseRepository<ReportRow> {
     // No filter at all: use Postgres' own row estimate on very large tables (instant).
     // It drifts ~1% between ANALYZEs, so only above a threshold where an exact count
     // would actually hurt (a 100k count(*) is ~25ms — accuracy is worth more there).
-    const ESTIMATE_ABOVE_ROWS = 2_000_000;
     if (!where) {
       const est = await this.query<{ n: number }>(
         `SELECT reltuples::bigint AS n FROM pg_class WHERE oid = $1::regclass`,

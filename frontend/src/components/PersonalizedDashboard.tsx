@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, DashboardMeta, ReportMeta } from "../api";
 import { SafeUser } from "../auth";
+import type { DashboardViewHandle } from "./DashboardView";
 
 const DashboardView = lazy(() => import("./DashboardView"));
 const DashboardBuilder = lazy(() => import("./DashboardBuilder"));
@@ -19,6 +20,7 @@ export default function PersonalizedDashboard({ user }: { user: SafeUser }) {
   const [active, setActive] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const dashboardRef = useRef<DashboardViewHandle>(null);
 
   const loadDashboards = () =>
     api.dashboards.list().then((rows) => {
@@ -76,8 +78,9 @@ export default function PersonalizedDashboard({ user }: { user: SafeUser }) {
           </select>
         )}
         <div className="dash-toolbar-right">
+          {current && <button className="primary" onClick={() => dashboardRef.current?.openAddChart()}>+ Add chart</button>}
           <button onClick={() => setBuilding(true)}>+ New dashboard</button>
-          {current && <button onClick={deleteCurrent}>Delete dashboard</button>}
+          {current && <button className="danger-outline" onClick={deleteCurrent}>Delete dashboard</button>}
         </div>
       </div>
 
@@ -87,7 +90,7 @@ export default function PersonalizedDashboard({ user }: { user: SafeUser }) {
       </p>
 
       {active ? (
-        <DashboardView key={active} dashboardKey={active} canEdit viewSources={viewSources} />
+        <DashboardView ref={dashboardRef} key={active} dashboardKey={active} canEdit viewSources={viewSources} />
       ) : (
         <div className="loading">No dashboards yet. Click “+ New dashboard” to start.</div>
       )}
