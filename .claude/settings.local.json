@@ -340,7 +340,13 @@
       "Bash(curl -s -o /dev/null -w 'HTTP %{http_code}\\\\n' -X DELETE localhost:8000/api/admin/reports/30 -H 'authorization: Bearer __CMDSUB_OUTPUT__')",
       "Bash(curl -s localhost:8000/api/admin/reports -H 'authorization: Bearer __CMDSUB_OUTPUT__')",
       "Bash(python3 -c \"import json,sys; [print\\(d['id'], d['key']\\) for d in json.load\\(sys.stdin\\)]\")",
-      "Bash(curl -s -o /dev/null -w 'HTTP %{http_code}\\\\n' -X DELETE localhost:8000/api/admin/reports/views/30 -H 'authorization: Bearer __CMDSUB_OUTPUT__')"
+      "Bash(curl -s -o /dev/null -w 'HTTP %{http_code}\\\\n' -X DELETE localhost:8000/api/admin/reports/views/30 -H 'authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT name FROM permissions WHERE name LIKE 'sync%' OR name LIKE 'audit%' ORDER BY name;\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"\\\\d permissions\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT code FROM permissions WHERE code LIKE 'sync%' OR code LIKE 'audit%' ORDER BY code;\")",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"SELECT count\\(*\\) FROM dataset_sync_state; SELECT count\\(*\\) FROM dataset_sync_history; SELECT count\\(*\\) FROM audit_log;\")",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@example.com\",\"password\":\"ChangeMe123!\"}')",
+      "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"\\\\d dataset_sync_history\")"
     ]
   }
 }

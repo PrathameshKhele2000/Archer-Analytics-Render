@@ -128,7 +128,7 @@ export interface SyncState {
   error_detail: string | null;
 }
 export interface SyncHistoryRow {
-  id: number; module_alias: string; run_type: string; status: string; attempt: number;
+  id: number; module_alias: string; run_type: string; status: string;
   rows_synced: number; error_detail: string | null; started_at: string; finished_at: string | null;
   duration_ms: number | null;
 }

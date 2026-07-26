@@ -123,7 +123,7 @@ function RolesPanel({
       <div className="tab-toolbar">
         <span className="muted small">{roles.length} role{roles.length !== 1 ? "s" : ""}</span>
         <div className="toolbar-actions">
-          <button className="link-btn" onClick={exportRoles}>⬆ Export CSV</button>
+          <button className="" onClick={exportRoles}>⬆ Export CSV</button>
           <button className="tb-btn" onClick={() => setImportOpen(true)}>⬇ Import</button>
           <button className="tb-btn primary" onClick={openCreate}>+ Create role</button>
         </div>

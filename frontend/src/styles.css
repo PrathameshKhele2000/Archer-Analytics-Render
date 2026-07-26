@@ -246,9 +246,13 @@ button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color
 /* ---- Access Control: sub-tabs, per-role resource grants ---- */
 .subtabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--hairline);
   padding-bottom: 10px; flex-wrap: wrap; }
-.subtabs button { background: transparent; border: 1px solid var(--hairline); }
+.subtabs button {
+  font-family: var(--font-sans); font-size: 12px; font-weight: 500;
+  background: transparent; color: var(--muted); border: 1px solid var(--hairline);
+  padding: 7px 14px; border-radius: 4px; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
 .subtabs button:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-.subtabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.subtabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .subtabs button.active:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
 
 .access-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 8px; }
@@ -346,12 +350,18 @@ button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color
 }
 .builder-chart .chart-actions button:disabled { opacity: 0.4; cursor: default; }
 .builder-actions { display: flex; gap: 8px; margin-top: 8px; }
+/* Save/Cancel for a bar/column/line/area chart sit under its live preview box instead
+   of back in the form column — clearly separated from the chart, not pressed against
+   its border, so they read as "confirm this chart" rather than part of the box itself. */
+.builder-actions.below-preview { margin-top: 14px; justify-content: flex-end; }
+.builder-actions.below-preview button { padding: 9px 18px; }
 .builder-actions button { font-family: var(--font-sans); font-size: 13px; border: 1px solid var(--hairline); background: transparent; color: var(--ink); padding: 8px 14px; border-radius: 3px; cursor: pointer; }
 .builder-actions button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
 /* Secondary (outline) buttons: accent text + border on hover; primaries darken. */
 .sync-actions button:not(.primary):hover, .admin-tab button:not(.danger):not(.primary):hover,
 .builder-actions button:not(.primary):hover, .form-actions button:not(.primary):hover, .pw-row button:hover,
-.datasets-tab .records-table button:not(.tb-btn):hover, .views-tab .records-table button:not(.tb-btn):hover {
+.datasets-tab .records-table button:not(.tb-btn):hover, .views-tab .records-table button:not(.tb-btn):hover,
+.fb-apply button:not(.primary):hover {
   border-color: var(--accent); color: var(--accent);
 }
 /* Primary (solid) buttons: darken on hover, text stays white. */
@@ -572,15 +582,24 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 /* ---- Modal ---- */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100;
   display: flex; align-items: flex-start; justify-content: center; padding: 60px 16px; overflow-y: auto; }
+/* Capped to the viewport (minus the overlay's own padding) and laid out as a column so
+   a long body (e.g. many columns selected) scrolls WITHIN itself — the header and tabs
+   stay put instead of the whole modal growing past the screen and taking them with it. */
 .modal { background: var(--surface); border-radius: 6px; box-shadow: 0 12px 48px rgba(0,0,0,0.25);
-  width: 100%; max-width: 520px; }
+  width: 100%; max-width: 520px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; }
 .modal.wide { max-width: 920px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
-  border-bottom: 1px solid var(--hairline); }
+  border-bottom: 1px solid var(--hairline); flex: none; }
 .modal-head h3 { margin: 0; font-size: 15px; }
 .modal-close { border: none; background: none; font-size: 15px; color: var(--muted); cursor: pointer; padding: 4px; }
 .modal-close:hover { color: var(--ink); }
-.modal-body { padding: 18px; }
+.modal-body { padding: 18px; overflow-y: auto; min-height: 0; }
+/* Keep Create/Save + Cancel reachable without scrolling all the way down a long body
+   (e.g. Views' "Columns To Show" with many columns picked) — pinned to the bottom of
+   the scrollable area itself, not the whole modal, so it never covers content while
+   there's still more to scroll past. */
+.modal-body .builder-actions { position: sticky; bottom: -18px; margin: 12px -18px -18px;
+  padding: 12px 18px; background: var(--surface); border-top: 1px solid var(--hairline); }
 .create-card.in-modal { border: none; padding: 0; max-width: none; margin: 0; }
 
 /* ---- Report header + advanced filter builder ---- */
@@ -663,10 +682,13 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 .fb-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; flex-wrap: wrap; gap: 8px; }
 .fb-add { border: 1px dashed var(--hairline); background: none; color: var(--sev-medium); cursor: pointer;
   font-family: var(--font-sans); font-size: 12px; padding: 6px 12px; border-radius: 3px; }
-.fb-apply { display: flex; gap: 8px; }
-.fb-apply button { font-family: var(--font-sans); font-size: 13px; border: 1px solid var(--hairline);
-  background: var(--bg); color: var(--ink); padding: 7px 14px; border-radius: 3px; cursor: pointer; }
+.fb-apply { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px;
+  padding-top: 10px; border-top: 1px solid var(--hairline); }
+.fb-apply button { font-family: var(--font-sans); font-size: 13px; font-weight: 500; border: 1px solid var(--hairline);
+  background: var(--surface); color: var(--ink); padding: 8px 16px; border-radius: 3px; cursor: pointer;
+  transition: border-color .12s ease, color .12s ease, background .12s ease; }
 .fb-apply button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.fb-apply button.primary:disabled { opacity: 0.5; cursor: default; }
 
 /* ---- Numbered condition list + manual logic expression ---- */
 .cond-list { display: flex; flex-direction: column; gap: 8px; }

@@ -190,6 +190,12 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   }, [schema, chartType, isCompare, isClause, measure, groupAgg, dimension, groupBy, compareField, needsDimension, supportsSeries]);
 
   const isTable = chartType === "table";
+  // Pie/donut/table/number previews are compact (a small slice legend, a records list,
+  // a single figure) and read fine with Save/Cancel in the form column where they've
+  // always been. A bar/column/line/area preview is a full chart the admin is actively
+  // tuning, so Save/Cancel move directly under IT instead — confirming "this chart",
+  // not something buried back in the form.
+  const actionsBelowPreview = !["pie", "donut", "table", "number"].includes(chartType);
   // Whether this chart has a colour key at all, i.e. whether "Show legend" does anything.
   // Pie/donut colour by slice; Compare and a split-by Group By colour by series.
   // Grouping (clause) shows one level at a time, so it is single-series like a plain bar.
@@ -624,12 +630,14 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
         <div className="caption-preview">{caption}</div>
 
         {error && <div className="login-error">{error}</div>}
-        <div className="builder-actions">
-          <button className="primary" onClick={save} disabled={saving}>
-            {saving ? "Saving…" : existing ? "Save chart" : "Add chart"}
-          </button>
-          <button onClick={onCancel}>Cancel</button>
-        </div>
+        {!actionsBelowPreview && (
+          <div className="builder-actions">
+            <button className="primary" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : existing ? "Save chart" : "Add chart"}
+            </button>
+            <button onClick={onCancel}>Cancel</button>
+          </div>
+        )}
       </div>
 
       <div className="editor-preview">
@@ -705,6 +713,15 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
             <div className="loading">No data for this selection.</div>
           )}
         </div>
+
+        {actionsBelowPreview && (
+          <div className="builder-actions below-preview">
+            <button className="primary" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : existing ? "Save chart" : "Add chart"}
+            </button>
+            <button onClick={onCancel}>Cancel</button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -106,7 +106,7 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
       <div className="tab-toolbar">
         <span className="muted small">{users.length} user{users.length !== 1 ? "s" : ""}</span>
         <div className="toolbar-actions">
-          <button className="link-btn" onClick={exportUsers}>⬆ Export CSV</button>
+          <button className="" onClick={exportUsers}>⬆ Export CSV</button>
           <button className="tb-btn" onClick={() => setImportOpen(true)}>⬇ Import</button>
           <button className="tb-btn primary" onClick={() => { setError(null); setCreateOpen(true); }}>+ Create user</button>
         </div>
@@ -276,13 +276,12 @@ function SyncTab() {
       ))}
       <h3>Run history</h3>
       <table className="findings">
-        <thead><tr><th>Started</th><th>Type</th><th>Attempt</th><th>Status</th><th>Rows</th><th>Duration</th><th>Error</th></tr></thead>
+        <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Rows</th><th>Duration</th><th>Error</th></tr></thead>
         <tbody>
           {history.map((h) => (
             <tr key={h.id}>
               <td className="num">{new Date(h.started_at).toLocaleString()}</td>
               <td>{h.run_type}</td>
-              <td className="num">{h.attempt}</td>
               <td>{h.status}</td>
               <td className="num">{h.rows_synced.toLocaleString()}</td>
               <td className="num">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s` : "—"}</td>
@@ -295,9 +294,21 @@ function SyncTab() {
   );
 }
 
+const nfAudit = new Intl.NumberFormat();
+
 function AuditTab() {
   const [rows, setRows] = useState<{ id: number; action: string; entity_type: string | null; user_email: string | null; status_code: number | null; created_at: string }[]>([]);
-  useEffect(() => { api.audit.search({ size: "50" }).then((r) => setRows(r.rows)).catch(console.error); }, []);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const size = 50;
+  const pages = Math.max(1, Math.ceil(total / size));
+
+  useEffect(() => {
+    api.audit.search({ page: String(page), size: String(size) })
+      .then((r) => { setRows(r.rows); setTotal(r.total); })
+      .catch(console.error);
+  }, [page]);
+
   return (
     <div className="admin-tab">
       <table className="findings">
@@ -314,6 +325,11 @@ function AuditTab() {
           ))}
         </tbody>
       </table>
+      <div className="pager">
+        <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</button>
+        <span>page {page} of {nfAudit.format(pages)} · {nfAudit.format(total)} entries</span>
+        <button disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>Next</button>
+      </div>
     </div>
   );
 }

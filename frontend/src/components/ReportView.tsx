@@ -127,7 +127,7 @@ export default function ReportView({
           </div>
           <button className={`filter-toggle${appliedCount ? " has-filters" : ""}`}
                   onClick={() => setShowFilters((s) => !s)} aria-expanded={showFilters}>
-            <span className="funnel">⛃</span> {appliedCount ? "Filters" : "Add filters"}
+            <span className="funnel"></span> {appliedCount ? "Filters" : "Add Filters"}
             {appliedCount > 0 && <span className="filter-count">{appliedCount}</span>}
             <span className="caret">{showFilters ? "▴" : "▾"}</span>
           </button>
@@ -147,7 +147,7 @@ export default function ReportView({
           <div className="fb-title">Filter conditions</div>
           <FilterConditions conditions={conditions} logic={logic} catalog={catalog}
                             onChange={(c, l) => { setConditions(c); setLogic(l); }} />
-          <div className="fb-apply-bar">
+          <div className="fb-apply">
             <button onClick={clearFilters}>Clear</button>
             <button className="primary" onClick={applyFilters} disabled={!conditions.length}>Apply filters</button>
           </div>

@@ -166,7 +166,7 @@ function DatasetTable({
           </div>
           <button className={`filter-toggle${appliedCount ? " has-filters" : ""}`}
                   onClick={() => setShowFilters((s) => !s)} aria-expanded={showFilters}>
-            <span className="funnel">⛃</span> {appliedCount ? "Filters" : "Add filters"}
+            <span className="funnel"></span> {appliedCount ? "Filters" : "Add Filters"}
             {appliedCount > 0 && <span className="filter-count">{appliedCount}</span>}
             <span className="caret">{showFilters ? "▴" : "▾"}</span>
           </button>
@@ -186,7 +186,7 @@ function DatasetTable({
           <div className="fb-title">Filter conditions</div>
           <FilterConditions conditions={conditions} logic={logic} catalog={schema}
                             onChange={(c, l) => { setConditions(c); setLogic(l); }} />
-          <div className="fb-apply-bar">
+          <div className="fb-apply">
             <button onClick={() => { setConditions([]); setLogic(""); setApplied(null); setPage(1); }}>Clear</button>
             <button className="primary" disabled={!conditions.length}
                     onClick={() => { setApplied({ conditions, logic }); setPage(1); setShowFilters(false); }}>
