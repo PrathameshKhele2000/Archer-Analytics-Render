@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { DbService } from "../database/db.service";
+import { MssqlSource } from "../sync-source/mssql.source";
 import {
   alterUsingFor,
   assertColumn,
@@ -21,7 +22,35 @@ import { CreateDatasetDto, UpdateDatasetDto } from "./dto/dataset.dto";
 export class DatasetsService {
   private readonly log = new Logger(DatasetsService.name);
 
-  constructor(private readonly db: DbService, private readonly catalogs: CatalogService) {}
+  constructor(
+    private readonly db: DbService,
+    private readonly catalogs: CatalogService,
+    private readonly source: MssqlSource,
+  ) {}
+
+  /**
+   * A live (MS SQL-backed) dataset's key/watermark columns must be real columns on
+   * the real source table — otherwise every sync silently saves a name SQL Server
+   * later rejects with "Invalid column name", a failure an admin only discovers
+   * after clicking Run full sync and finding zero rows with no clear reason why.
+   * Checked here, at save time, so a bad value can never be stored at all.
+   */
+  private async validateLiveColumns(sourceTable: string, keyColumn: string | undefined, watermarkColumn?: string | null) {
+    if (!keyColumn?.trim()) {
+      throw new BadRequestException(
+        "Key column is required for a live source — set it to the real unique-id column from the source table (use Discover columns).",
+      );
+    }
+    const columns = await this.source.describeTable(sourceTable);
+    const real = new Set(columns.map((c) => c.name.toLowerCase()));
+    const names = columns.map((c) => c.name).join(", ");
+    if (!real.has(keyColumn.trim().toLowerCase())) {
+      throw new BadRequestException(`Key column '${keyColumn}' does not exist on '${sourceTable}'. Real columns: ${names}`);
+    }
+    if (watermarkColumn?.trim() && !real.has(watermarkColumn.trim().toLowerCase())) {
+      throw new BadRequestException(`Watermark column '${watermarkColumn}' does not exist on '${sourceTable}'. Real columns: ${names}`);
+    }
+  }
 
   async list() {
     const { rows } = await this.db.query(
@@ -86,7 +115,20 @@ export class DatasetsService {
     const clash = await this.db.query(`SELECT to_regclass($1) AS t`, [targetTable]);
     if (clash.rows[0]?.t) throw new BadRequestException(`Table '${targetTable}' already exists`);
 
+    if (dto.sourceTable?.trim()) {
+      await this.validateLiveColumns(dto.sourceTable.trim(), dto.keyColumn, dto.watermarkColumn);
+    }
+
     await this.db.query(buildCreateTableSql(targetTable, fields));
+    // A synced dataset gets rewritten (via ON CONFLICT DO UPDATE) a substantial
+    // fraction of its rows on every sync — the default autovacuum thresholds (20%
+    // dead rows / 10% stale stats) are tuned for ordinary OLTP tables, not one that
+    // can rewrite itself daily, so it'd bloat and its query-planner stats would
+    // lag without tighter ones. Set once here, automatically, at creation — no
+    // admin ever needs to run this by hand on a server they can't easily touch.
+    await this.db.query(
+      `ALTER TABLE ${targetTable} SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02)`,
+    );
     this.log.log(`created dataset table ${targetTable} (${fields.length} fields)`);
 
     const { rows } = await this.db.query<DatasetRow>(
@@ -95,7 +137,7 @@ export class DatasetsService {
       [
         key, dto.name.trim(), dto.description ?? null,
         dto.sourceTable ?? null, targetTable,
-        dto.keyColumn || "ContentId", dto.watermarkColumn || null,
+        dto.keyColumn?.trim() || null, dto.watermarkColumn?.trim() || null,
       ],
     );
     const dataset = rows[0];
@@ -158,6 +200,18 @@ export class DatasetsService {
     if (!ds) throw new NotFoundException("Dataset not found");
     const structural = !ds.is_protected && /^ds_[a-z0-9_]+$/.test(ds.target_table); // add/drop/retype allowed?
     const table = ds.target_table;
+
+    // Validate against the real source table whenever this request touches the
+    // source table or either column and the dataset ends up with a source table set
+    // — catches a bad "Record id column"/"Last-updated column" edit at Save time
+    // instead of letting it through to fail later, silently, during sync.
+    const effectiveSourceTable = (dto.sourceTable ?? ds.source_table)?.trim();
+    const touchesLiveColumns = dto.sourceTable !== undefined || dto.keyColumn !== undefined || dto.watermarkColumn !== undefined;
+    if (effectiveSourceTable && touchesLiveColumns) {
+      const effectiveKeyColumn = dto.keyColumn?.trim() || ds.key_column;
+      const effectiveWatermarkColumn = dto.watermarkColumn !== undefined ? dto.watermarkColumn : ds.watermark_column;
+      await this.validateLiveColumns(effectiveSourceTable, effectiveKeyColumn, effectiveWatermarkColumn);
+    }
 
     // 1. Settings (name / description / source table / id + watermark columns).
     await this.db.query(
@@ -348,10 +402,12 @@ export class DatasetsService {
     const { rows } = await this.db.query<DatasetRow>(`SELECT * FROM dataset WHERE id = $1`, [id]);
     const dataset = rows[0];
     if (!dataset) throw new NotFoundException("Dataset not found");
-    if (dataset.is_protected) {
-      throw new BadRequestException(`'${dataset.name}' is a built-in dataset and cannot be removed`);
-    }
-    if (!/^ds_[a-z0-9_]+$/.test(dataset.target_table)) {
+    // No dataset is undeletable, including the built-in "Vulnerability Findings" one
+    // (target_table 'fact_findings') — is_protected no longer blocks removal, only
+    // still guards against ALTERing its columns in update() (a different, more
+    // invasive operation this doesn't touch). The name check stays as a safety net
+    // against a dataset row somehow pointing at an unrelated, unmanaged table.
+    if (!/^(ds_[a-z0-9_]+|fact_findings)$/.test(dataset.target_table)) {
       throw new BadRequestException(`Refusing to drop '${dataset.target_table}': not a generated dataset table`);
     }
     // Charts built against this dataset (directly or through a view) each get their own

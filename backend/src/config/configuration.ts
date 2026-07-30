@@ -8,6 +8,10 @@ export interface AppConfig {
     host: string; port: number; database: string;
     user: string; password: string;
     encrypt: boolean; trustServerCertificate: boolean;
+    /** Named-instance SQL Server, e.g. "GRCLabs\GRCLABS" — set instanceName to the
+     *  part after the backslash and leave port unset; the driver resolves the real
+     *  port via the SQL Browser service (UDP 1434) instead of using a fixed one. */
+    instanceName: string;
   };
   syncMaxRetries: number;
   syncRetryBaseMs: number;
@@ -43,6 +47,7 @@ export default (): AppConfig => ({
     password: process.env.MSSQL_PASSWORD ?? "",
     encrypt: (process.env.MSSQL_ENCRYPT ?? "false").toLowerCase() === "true",
     trustServerCertificate: (process.env.MSSQL_TRUST_CERT ?? "true").toLowerCase() === "true",
+    instanceName: process.env.MSSQL_INSTANCE ?? "",
   },
   syncMaxRetries: parseInt(process.env.SYNC_MAX_RETRIES ?? "3", 10),
   syncRetryBaseMs: parseInt(process.env.SYNC_RETRY_BASE_MS ?? "2000", 10),

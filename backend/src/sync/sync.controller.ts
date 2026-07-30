@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query } from "@nestjs/common";
+import { BadRequestException, Controller, Get, Post, Query } from "@nestjs/common";
 import { Public } from "../common/decorators/public.decorator";
 import { Permissions } from "../common/decorators/permissions.decorator";
 import { DatasetSyncService } from "../sync-source/dataset-sync.service";
@@ -33,14 +33,35 @@ export class SyncController {
     return this.sync.history_(Math.min(500, Math.max(1, parseInt(limitQ ?? "50", 10) || 50)));
   }
 
-  /** On-demand run. The scheduler already does this automatically. */
+  /**
+   * On-demand run. The scheduler already does this automatically.
+   *
+   * Deliberately fire-and-forget for the actual sync work (a full sync of a large
+   * table can run for a long time — the HTTP call can't wait for that). But a run
+   * that's already stuck from an earlier attempt used to fail this exact same way,
+   * silently, forever: this endpoint always answered "started" even when nothing
+   * was going to happen. Now the ONE thing that can be checked synchronously — is
+   * this already running — is checked before answering, so that failure mode is
+   * visible instead of indistinguishable from working.
+   */
   @Post("sync/run")
   @Permissions("sync:run")
   run(@Query("full") full?: string, @Query("dataset") dataset?: string) {
     const isFull = (full ?? "").toLowerCase() === "true";
     if (dataset) {
+      if (this.sync.runningKeys().includes(dataset)) {
+        throw new BadRequestException(
+          `Sync for '${dataset}' is already running. If it's been stuck for a long time, restart the backend to clear it.`,
+        );
+      }
       void this.sync.syncDataset(dataset, isFull).catch(() => undefined);
       return { status: "started", dataset, full: isFull };
+    }
+    const already = this.sync.runningKeys();
+    if (already.length) {
+      throw new BadRequestException(
+        `Sync already running for: ${already.join(", ")}. If it's been stuck for a long time, restart the backend to clear it.`,
+      );
     }
     void this.sync.syncAll(isFull).catch(() => undefined);
     return { status: "started", full: isFull };

@@ -8,15 +8,26 @@ export interface SourceColumn {
   nullable: boolean;
 }
 
-/** A two-part SQL Server name, e.g. dbo.ArcherFindingsFeed. */
-const OBJECT_RE = /^(?:\[?([A-Za-z_][\w]{0,127})\]?\.)?\[?([A-Za-z_][\w]{0,127})\]?$/;
+/**
+ * A two-part SQL Server name, e.g. dbo.ArcherFindingsFeed — or a single column name.
+ * This function does double duty: parsing "schema.table" AND validating a bare
+ * column name (describeTable/streamQuery call it on the watermark column too).
+ * Real Archer exports routinely have spaces in column names ("CVE ID", "Content ID", "Last
+ * Updated Date", ...), so the final segment allows anything except the characters
+ * that would let it break out of our own "[...]" quoting or inject a newline — it
+ * does NOT need to look like a programming identifier, only be safe to bracket-quote.
+ * The optional schema prefix stays restricted to a plain identifier: nothing here
+ * legitimately needs a space before the dot.
+ */
+const OBJECT_RE = /^(?:\[?([A-Za-z_][\w]{0,127})\]?\.)?\[?([^[\]\r\n]{1,128})\]?$/;
 
-/** Split + validate a table name, then re-quote it ourselves — never interpolate raw input. */
+/** Split + validate a table/column name, then re-quote it ourselves — never interpolate raw input. */
 export function parseObjectName(name: string): { schema: string; table: string; quoted: string } {
   const m = OBJECT_RE.exec((name ?? "").trim());
   if (!m) throw new BadRequestException(`Invalid source table name '${name}'`);
   const schema = m[1] ?? "dbo";
-  const table = m[2];
+  const table = m[2].trim();
+  if (!table) throw new BadRequestException(`Invalid source table name '${name}'`);
   return { schema, table, quoted: `[${schema}].[${table}]` };
 }
 
@@ -45,20 +56,55 @@ export class MssqlSource implements OnModuleDestroy {
         "MS SQL reporting source is not configured — set MSSQL_HOST / MSSQL_DATABASE / MSSQL_USER / MSSQL_PASSWORD",
       );
     }
-    this.pool = await new sql.ConnectionPool({
-      server: this.cfg.get<string>("mssql.host")!,
-      port: this.cfg.get<number>("mssql.port") ?? 1433,
-      database: this.cfg.get<string>("mssql.database")!,
-      user: this.cfg.get<string>("mssql.user"),
-      password: this.cfg.get<string>("mssql.password"),
-      options: {
-        encrypt: this.cfg.get<boolean>("mssql.encrypt") ?? false,
-        trustServerCertificate: this.cfg.get<boolean>("mssql.trustServerCertificate") ?? true,
-      },
-      pool: { max: 4, min: 0, idleTimeoutMillis: 30_000 },
-      requestTimeout: 120_000,
-    }).connect();
-    this.log.log(`MS SQL connected: ${this.cfg.get("mssql.host")}/${this.cfg.get("mssql.database")}`);
+    const host = this.cfg.get<string>("mssql.host");
+    const port = this.cfg.get<number>("mssql.port") ?? 1433;
+    const database = this.cfg.get<string>("mssql.database");
+    const instanceName = this.cfg.get<string>("mssql.instanceName");
+    // A named instance ("HOST\INSTANCE") is resolved by the driver via the SQL
+    // Browser service (UDP 1434) rather than a fixed port — passing both a port AND
+    // an instanceName is invalid, so port is only sent when there's no instance name.
+    const target = instanceName ? `${host}\\${instanceName}` : `${host}:${port}`;
+    // Logged BEFORE connect() resolves: if this line never appears, the hang is
+    // upstream of MS SQL entirely (config/DI); if it appears and nothing follows for
+    // a long time, the hang is the connection handshake itself (network/firewall/
+    // credentials) — otherwise this call would fail fast on its own connectionTimeout.
+    this.log.log(`MS SQL connecting: ${target}/${database}…`);
+    try {
+      this.pool = await new sql.ConnectionPool({
+        server: host!,
+        ...(instanceName ? {} : { port }),
+        database: database!,
+        user: this.cfg.get<string>("mssql.user"),
+        password: this.cfg.get<string>("mssql.password"),
+        options: {
+          encrypt: this.cfg.get<boolean>("mssql.encrypt") ?? false,
+          trustServerCertificate: this.cfg.get<boolean>("mssql.trustServerCertificate") ?? true,
+          ...(instanceName ? { instanceName } : {}),
+        },
+        pool: { max: 4, min: 0, idleTimeoutMillis: 30_000 },
+        // Generous, not infinite: a full sync of a large table over a slow link is
+        // one long-running query now (streamed), so it must tolerate genuinely
+        // taking a long time — but a real hang (a lock on the source, a stalled
+        // connection that never fully drops) needs SOME ceiling, or the sync waits
+        // forever with no automatic recovery, only a manual backend restart. 45
+        // minutes comfortably covers a real 10M-row pull while still catching a
+        // truly stuck query and turning it into a visible error instead of silence.
+        // connectionTimeout (below) is separate and deliberately short: it's fine
+        // for the initial handshake to fail fast if the server's unreachable at all.
+        requestTimeout: 45 * 60_000,
+        connectionTimeout: 15_000,
+      }).connect();
+    } catch (e: any) {
+      // A raw driver error here (ECONNREFUSED, login failed, timeout, ...) used to
+      // propagate uncaught and surface to the admin as a bare 500 — no message, no
+      // way to tell "wrong host" apart from "wrong password" apart from "firewalled".
+      // Wrapped as a BadRequestException, the actual driver message reaches the UI.
+      throw new BadRequestException(
+        `Could not connect to MS SQL at ${target}/${database} — ${e?.message ?? e}. ` +
+        `Check MSSQL_HOST / MSSQL_INSTANCE / MSSQL_PORT / MSSQL_DATABASE / MSSQL_USER / MSSQL_PASSWORD in .env.`,
+      );
+    }
+    this.log.log(`MS SQL connected: ${target}/${database}`);
     return this.pool;
   }
 
@@ -109,36 +155,39 @@ export class MssqlSource implements OnModuleDestroy {
   }
 
   /**
-   * One page of rows, oldest-change-first. `since` makes it incremental: only rows
-   * whose watermark moved. Keyset-free paging (OFFSET/FETCH) is fine here because
-   * we order by the watermark and page through a bounded change set.
+   * Stream every matching row over ONE query instead of paging through many —
+   * paging cost one network round trip per page (1000 rows each), which is fine on
+   * a fast local link but becomes the dominant cost on a slow/high-latency one: 10M
+   * rows at 1000/page is 10,000 round trips, each paying full network latency
+   * before a single row moves. A single streamed query pays that latency once.
+   * `since`/`watermarkColumn` still narrow it to an incremental change set when set.
+   *
+   * Rows arrive via the returned `request`'s 'row' event as they're read off the
+   * wire — the caller is responsible for backpressure (request.pause()/resume())
+   * against whatever it's writing them into, and for listening for 'error'. `done`
+   * resolves once the whole result set has been delivered.
    */
-  async readBatch(opts: {
+  async streamQuery(opts: {
     table: string;
-    keyColumn: string;
     watermarkColumn?: string | null;
     since?: Date | null;
-    offset: number;
-    limit: number;
-  }): Promise<any[]> {
+  }): Promise<{ request: sql.Request; done: Promise<void> }> {
     const { quoted } = parseObjectName(opts.table);
-    const key = parseObjectName(opts.keyColumn).table; // validates the identifier
     const wm = opts.watermarkColumn ? parseObjectName(opts.watermarkColumn).table : null;
 
     const pool = await this.getPool();
-    const req = pool.request();
+    const request = pool.request();
+    request.stream = true;
     let where = "";
     if (wm && opts.since) {
-      req.input("since", sql.DateTime2, opts.since);
+      request.input("since", sql.DateTime2, opts.since);
       where = `WHERE [${wm}] > @since`;
     }
-    const orderBy = wm ? `[${wm}] ASC, [${key}] ASC` : `[${key}] ASC`;
-    const r = await req.query(
-      `SELECT * FROM ${quoted} ${where}
-       ORDER BY ${orderBy}
-       OFFSET ${Math.max(0, Math.floor(opts.offset))} ROWS
-       FETCH NEXT ${Math.max(1, Math.floor(opts.limit))} ROWS ONLY`,
-    );
-    return r.recordset;
+    const done = new Promise<void>((resolve, reject) => {
+      request.on("error", (err: any) => reject(err));
+      request.on("done", () => resolve());
+    });
+    request.query(`SELECT * FROM ${quoted} ${where}`); // streaming: don't await, consume via events
+    return { request, done };
   }
 }

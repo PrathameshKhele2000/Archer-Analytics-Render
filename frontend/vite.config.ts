@@ -18,6 +18,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    proxy: { "/api": { target: "http://localhost:8000", changeOrigin: true } },
+    // Must match wherever the backend actually binds. It normally reads PORT=8000
+    // from backend/.env, but an OS-level PORT env var (Windows System/User env vars
+    // take precedence over .env) can silently override that — check what the
+    // backend's own startup log says ("API listening on :____") if this ever drifts.
+    proxy: { "/api": { target: "http://localhost:8001", changeOrigin: true } },
   },
 });

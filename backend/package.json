@@ -28,6 +28,7 @@
     "passport-jwt": "^4.0.1",
     "pdfkit": "^0.15.2",
     "pg": "^8.13.1",
+    "pg-copy-streams": "^7.0.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "yaml": "^2.7.0"
@@ -41,6 +42,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/pdfkit": "^0.13.9",
     "@types/pg": "^8.11.10",
+    "@types/pg-copy-streams": "^1.2.5",
     "typescript": "^5.7.2"
   }
 }

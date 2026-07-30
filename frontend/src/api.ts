@@ -65,7 +65,22 @@ async function request<T>(path: string, init: RequestInit = {}, retried = false)
     onUnauthorized?.();
     throw new Error("Session expired");
   }
-  if (!res.ok) throw new ApiError(`${path} -> ${res.status}`, res.status);
+  if (!res.ok) {
+    // NestJS error responses are {statusCode, message, error} — message can be a
+    // plain string or (from ValidationPipe) a string[]. Read it so callers see the
+    // actual reason ("Key column 'X' does not exist on 'Y'. Real columns: ...")
+    // instead of a bare "path -> 400" that throws away everything useful the
+    // backend went to the trouble of saying.
+    let reason = `${path} -> ${res.status}`;
+    try {
+      const body = await res.clone().json();
+      const msg = Array.isArray(body?.message) ? body.message.join("; ") : body?.message;
+      if (msg) reason = msg;
+    } catch {
+      // Body wasn't JSON (or was empty) — fall back to the path/status string above.
+    }
+    throw new ApiError(reason, res.status);
+  }
   // Tolerate empty bodies (e.g. a 200 from a void DELETE) instead of failing on JSON.parse.
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -486,7 +501,10 @@ export const api = {
   sync: {
     status: () => get<SyncState[]>("/api/sync/status"),
     history: (limit = 25) => get<SyncHistoryRow[]>(`/api/sync/history?limit=${limit}`),
-    run: (full = false) => post<{ status: string; full: boolean }>(`/api/sync/run?full=${full}`),
+    run: (full = false, dataset?: string) =>
+      post<{ status: string; full: boolean; dataset?: string }>(
+        `/api/sync/run?full=${full}${dataset ? `&dataset=${encodeURIComponent(dataset)}` : ""}`,
+      ),
   },
 
   admin: {

@@ -247,9 +247,30 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
 }
 
 
+// A "running" status that's been sitting there this long almost certainly isn't —
+// a genuinely working sync reports progress well within this window (see the
+// backend's own ~10s proof-of-life log). Past it, flag it rather than let a dead
+// run look identical to a live one indefinitely.
+const STUCK_AFTER_MS = 10 * 60 * 1000;
+
+function syncBadge(s: SyncState): { label: string; cls: string } {
+  if (s.last_status === "running") {
+    const age = s.last_run_at ? Date.now() - new Date(s.last_run_at).getTime() : 0;
+    return age > STUCK_AFTER_MS
+      ? { label: `stuck? (running ${Math.round(age / 60000)}m)`, cls: "warn-chip" }
+      : { label: "running", cls: "ok-chip" };
+  }
+  if (s.last_status === "error") return { label: "error", cls: "tag error" };
+  if (s.last_status === "ok") return { label: "idle · ok", cls: "muted" };
+  return { label: s.last_status ?? "never run", cls: "muted" };
+}
+
 function SyncTab() {
+  const [tab, setTab] = useState<"status" | "history">("status");
   const [status, setStatus] = useState<SyncState[]>([]);
   const [history, setHistory] = useState<SyncHistoryRow[]>([]);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = () => {
     api.sync.status().then(setStatus).catch(console.error);
@@ -261,35 +282,69 @@ function SyncTab() {
     return () => clearInterval(t);
   }, []);
 
+  // A click that fails silently (an expired session, no sync:run permission, the
+  // server being down, a run already in progress) used to look identical to
+  // "started fine" — nothing anywhere told you it didn't work. Now it does.
+  const runSync = (full: boolean) => {
+    setErr(null); setRunning(true);
+    api.sync.run(full)
+      .then(() => setTimeout(load, 1500))
+      .catch((e: any) => setErr(e.message ?? "Sync request failed — see console for details."))
+      .finally(() => setRunning(false));
+  };
+
   return (
     <div className="admin-tab">
       <div className="sync-actions">
-        <button onClick={() => api.sync.run(false).then(() => setTimeout(load, 1500))}>Run incremental sync</button>
-        <button onClick={() => api.sync.run(true).then(() => setTimeout(load, 1500))}>Run full sync</button>
+        <button onClick={() => runSync(false)} disabled={running}>Run incremental sync</button>
+        <button onClick={() => runSync(true)} disabled={running}>Run full sync</button>
       </div>
-      {status.map((s) => (
-        <p key={s.module_alias}>
-          <b>{s.module_alias}</b>: {s.last_status} · {s.rows_synced.toLocaleString()} rows
-          {s.last_run_at ? ` · last run ${new Date(s.last_run_at).toLocaleString()}` : ""}
-          {s.error_detail ? ` · error: ${s.error_detail}` : ""}
-        </p>
-      ))}
-      <h3>Run history</h3>
-      <table className="findings">
-        <thead><tr><th>Started</th><th>Type</th><th>Status</th><th>Rows</th><th>Duration</th><th>Error</th></tr></thead>
-        <tbody>
-          {history.map((h) => (
-            <tr key={h.id}>
-              <td className="num">{new Date(h.started_at).toLocaleString()}</td>
-              <td>{h.run_type}</td>
-              <td>{h.status}</td>
-              <td className="num">{h.rows_synced.toLocaleString()}</td>
-              <td className="num">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s` : "—"}</td>
-              <td>{h.error_detail ?? ""}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {err && <div className="login-error">{err}</div>}
+
+      <div className="subtabs">
+        <button className={tab === "status" ? "active" : ""} onClick={() => setTab("status")}>Status</button>
+        <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>Run history</button>
+      </div>
+
+      {tab === "status" && (
+        <table className="findings">
+          <thead><tr><th>Dataset</th><th>State</th><th>Rows</th><th>Last run</th><th>Error</th></tr></thead>
+          <tbody>
+            {status.map((s) => {
+              const badge = syncBadge(s);
+              return (
+                <tr key={s.module_alias}>
+                  <td><b>{s.module_alias}</b></td>
+                  <td><span className={badge.cls}>{badge.label}</span></td>
+                  <td className="num">{s.rows_synced.toLocaleString()}</td>
+                  <td className="muted">{s.last_run_at ? new Date(s.last_run_at).toLocaleString() : "never"}</td>
+                  <td className="muted">{s.error_detail ?? ""}</td>
+                </tr>
+              );
+            })}
+            {!status.length && <tr><td colSpan={5} className="muted">No datasets have synced yet.</td></tr>}
+          </tbody>
+        </table>
+      )}
+
+      {tab === "history" && (
+        <table className="findings">
+          <thead><tr><th>Started</th><th>Dataset</th><th>Type</th><th>Status</th><th>Rows</th><th>Duration</th><th>Error</th></tr></thead>
+          <tbody>
+            {history.map((h) => (
+              <tr key={h.id}>
+                <td className="num">{new Date(h.started_at).toLocaleString()}</td>
+                <td>{h.module_alias}</td>
+                <td>{h.run_type}</td>
+                <td>{h.status}</td>
+                <td className="num">{h.rows_synced.toLocaleString()}</td>
+                <td className="num">{h.duration_ms ? `${(h.duration_ms / 1000).toFixed(1)}s` : "—"}</td>
+                <td>{h.error_detail ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

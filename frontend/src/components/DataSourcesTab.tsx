@@ -24,7 +24,7 @@ const FIELD_FLAGS = { is_dimension: true, is_measurable: true, is_searchable: tr
 const emptyField = (): DatasetFieldDef => ({ label: "", data_type: "text", ...FIELD_FLAGS });
 
 const emptyDraft = (): CreateDatasetBody => ({
-  name: "", description: "", sourceTable: "", keyColumn: "ContentId", watermarkColumn: "LastUpdated",
+  name: "", description: "", sourceTable: "", keyColumn: "", watermarkColumn: "",
   fields: [emptyField()],
 });
 
@@ -81,9 +81,20 @@ export default function DataSourcesTab() {
   const [csvRows, setCsvRows] = useState<Record<string, string>[] | null>(null); // parsed CSV to load after create
   const [csvName, setCsvName] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [syncingKey, setSyncingKey] = useState<string | null>(null);
 
   const load = () => api.admin.datasets.list().then(setRows).catch((e) => setErr(String(e.message ?? e)));
   useEffect(() => { load(); }, []);
+
+  // Full sync for just this one pipe — the global "Run full sync" in Admin -> Sync
+  // pulls every dataset, which is rarely what you want while testing one specific
+  // dataset's config. Uses the same ?dataset= support the backend already has.
+  const runSync = (d: Dataset) => {
+    setErr(null); setSyncingKey(d.key);
+    api.sync.run(true, d.key)
+      .catch((e: any) => setErr(e.message ?? `Sync failed for '${d.name}'`))
+      .finally(() => setSyncingKey(null));
+  };
 
   const patchField = (i: number, patch: Partial<DatasetFieldDef>) =>
     setDraft((d) => d && ({ ...d, fields: d.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }));
@@ -146,17 +157,37 @@ export default function DataSourcesTab() {
     setDiscovering(true); setErr(null); setSql(null); setDiscovered(null);
     try {
       const cols = await api.admin.source.columns(draft.sourceTable.trim());
-      const keyCol = (draft.keyColumn || "").trim().toLowerCase();
+      if (!cols.length) return setErr("No columns found on that table.");
+      const realNames = new Set(cols.map((c) => c.name.toLowerCase()));
+
+      // The key/watermark columns are detected automatically from the real source —
+      // the admin never has to type them. If the current draft value isn't a real
+      // column here, guess an id-shaped one from the real names; if that also comes
+      // up empty, leave it blank and the fallback field below appears so it can still
+      // be set by hand for the rare table with no recognizable id-like column name.
+      let keyCol = (draft.keyColumn || "").trim();
+      if (!keyCol || !realNames.has(keyCol.toLowerCase())) {
+        keyCol = cols.find((c) => ID_HEADER_HINTS.some((re) => re.test(c.name)))?.name ?? "";
+      }
+      let wmCol = (draft.watermarkColumn || "").trim();
+      if (wmCol && !realNames.has(wmCol.toLowerCase())) wmCol = "";
+
+      const keyColLower = keyCol.toLowerCase();
       const fields: DatasetFieldDef[] = cols
-        .filter((c) => c.name.toLowerCase() !== keyCol) // key column -> record_id (added automatically)
+        .filter((c) => c.name.toLowerCase() !== keyColLower) // key column -> record_id (added automatically)
         .map((c) => ({ label: c.name, data_type: c.dataType, ...FIELD_FLAGS }));
-      if (!fields.length) return setErr("No columns found on that table.");
-      setDraft({ ...draft, fields });
+      setDraft({ ...draft, fields, keyColumn: keyCol, watermarkColumn: wmCol });
       setDiscovered(fields.length);
+      if (!keyCol) {
+        setErr(
+          "Couldn't guess the row-id column from these column names — set \"Record id column\" below " +
+          "to the real unique-id column from this table before saving, or sync will fail.",
+        );
+      }
     } catch (e: any) {
-      setErr(e.message?.includes("400")
-        ? "Couldn't read the source. Is the MS SQL connection configured (MSSQL_* in .env) and the table name correct?"
-        : (e.message ?? "Discover failed"));
+      // e.message is now the backend's actual reason (connection failure with the
+      // real driver error, "table not found", etc.) rather than a bare status code.
+      setErr(e.message ?? "Discover failed");
     } finally { setDiscovering(false); }
   };
 
@@ -218,7 +249,13 @@ export default function DataSourcesTab() {
   };
 
   const remove = async (d: Dataset) => {
-    if (!confirm(`Remove the "${d.name}" dataset and drop its table (${d.target_table})?\n\nThe data is a copy from Archer, so it can be re-synced.`)) return;
+    const warning = d.is_protected
+      ? `Remove the built-in "${d.name}" dataset and drop its table (${d.target_table})?\n\n` +
+        `This is the original Vulnerability Findings pipe — its Field Mapping entries and any ` +
+        `sample reports/dashboards built against it will break once the table is gone. ` +
+        `The data is a copy from Archer, so it can be re-synced if you recreate it.`
+      : `Remove the "${d.name}" dataset and drop its table (${d.target_table})?\n\nThe data is a copy from Archer, so it can be re-synced.`;
+    if (!confirm(warning)) return;
     try { await api.admin.datasets.remove(d.id); await load(); }
     catch (e: any) { setErr(e.message ?? "Remove failed"); }
   };
@@ -262,8 +299,13 @@ export default function DataSourcesTab() {
                 <td className="muted"><code>{d.key_column}</code>{d.watermark_column ? <> · <code>{d.watermark_column}</code></> : null}</td>
                 <td>
                   <div className="panel-actions">
+                    {d.source_table && (
+                      <button onClick={() => runSync(d)} disabled={syncingKey === d.key}>
+                        {syncingKey === d.key ? "Syncing…" : "Run full sync"}
+                      </button>
+                    )}
                     <button onClick={() => openEdit(d)}>Edit</button>
-                    {!d.is_protected && <button onClick={() => remove(d)}>✕</button>}
+                    <button onClick={() => remove(d)}>✕</button>
                   </div>
                 </td>
               </tr>
@@ -289,27 +331,35 @@ export default function DataSourcesTab() {
             </div>
 
             <div className="field-label">Where it comes from</div>
-            <div className="grid-3col">
+            <div className="grid-2col">
               <label className="builder-field">
                 Source table (MS SQL)
                 <input value={draft.sourceTable ?? ""} onChange={(e) => setDraft({ ...draft, sourceTable: e.target.value })}
                        placeholder="dbo.ArcherDevicesFeed" />
               </label>
-              <label className="builder-field">
-                Record id column
-                <input value={draft.keyColumn ?? ""} onChange={(e) => setDraft({ ...draft, keyColumn: e.target.value })}
-                       placeholder="ContentId" />
-              </label>
-              <label className="builder-field">
-                Last-updated column
-                <input value={draft.watermarkColumn ?? ""} onChange={(e) => setDraft({ ...draft, watermarkColumn: e.target.value })}
-                       placeholder="LastUpdated" />
-              </label>
             </div>
             <p className="muted small">
-              The record id makes re-syncing update rather than duplicate; the last-updated column enables
-              incremental sync. Target table will be <code>ds_{toColumn(draft.name) || "…"}</code>.
+              The row-id and last-updated columns are detected automatically from Discover (or from the
+              CSV headers) — no need to type them. Target table will be <code>ds_{toColumn(draft.name) || "…"}</code>.
             </p>
+
+            {/* Manual fallback: only shown when editing an existing dataset (Discover isn't
+                available there), or when auto-detect genuinely couldn't guess a row-id column
+                from the real names — the common path never shows these at all. */}
+            {(!!editing || ((discovered != null || !!csvRows) && !draft.keyColumn)) && (
+              <div className="grid-2col">
+                <label className="builder-field">
+                  Record id column
+                  <input value={draft.keyColumn ?? ""} onChange={(e) => setDraft({ ...draft, keyColumn: e.target.value })}
+                         placeholder="e.g. ContentId" />
+                </label>
+                <label className="builder-field">
+                  Last-updated column (optional)
+                  <input value={draft.watermarkColumn ?? ""} onChange={(e) => setDraft({ ...draft, watermarkColumn: e.target.value })}
+                         placeholder="e.g. LastUpdated" />
+                </label>
+              </div>
+            )}
 
             {!editing && <div className="discover-bar">
               <button type="button" className="tb-btn" onClick={discover} disabled={discovering}>

@@ -141,6 +141,26 @@ export class SchemaBootstrapService implements OnApplicationBootstrap {
             ON CONFLICT DO NOTHING`,
     },
     {
+      // Every dataset table gets rewritten a large share of its rows on each sync
+      // (ON CONFLICT DO UPDATE) — new datasets pick this up at creation time
+      // (DatasetsService.create), but this catches ones that existed before that,
+      // including the built-in "Vulnerability Findings" table, on every boot. A
+      // dynamic DO block, not a fixed table name, since datasets are created at
+      // runtime — this is the one step here that has to loop over live data rather
+      // than name a specific table.
+      name: "dataset tables: autovacuum tuning",
+      sql: `DO $$
+            DECLARE r RECORD;
+            BEGIN
+              FOR r IN SELECT DISTINCT target_table FROM dataset WHERE target_table IS NOT NULL LOOP
+                EXECUTE format(
+                  'ALTER TABLE %I SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02)',
+                  r.target_table
+                );
+              END LOOP;
+            END $$;`,
+    },
+    {
       name: "remove legacy seed roles",
       // System Admin is the only built-in role. Users can never create is_system
       // roles through the app, so any OTHER is_system role is a legacy seed
