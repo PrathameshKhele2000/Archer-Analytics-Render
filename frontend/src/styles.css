@@ -327,10 +327,12 @@ button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color
    the primary thing to do here rather than blending into Delete. */
 .dash-toolbar button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
 .dash-toolbar button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-/* "Delete dashboard": destructive, so it's tinted red rather than sharing the accent
-   color with the actions that create or add to a dashboard. */
-.dash-toolbar button.danger-outline { color: #b42318; border-color: #f3b9b2; background: transparent; }
-.dash-toolbar button.danger-outline:hover { background: #fdecea; color: #b42318; border-color: #e88b80; }
+/* Destructive actions (delete dashboard, stop a running sync, ...): tinted red
+   rather than sharing the accent color with the actions that create/start things.
+   Not scoped to .dash-toolbar — reused anywhere a destructive/stop action sits
+   next to a regular one (e.g. Data Sources' per-dataset row actions). */
+button.danger-outline { color: #b42318; border-color: #f3b9b2; background: transparent; }
+button.danger-outline:hover { background: #fdecea; color: #b42318; border-color: #e88b80; }
 
 .builder { margin-top: 20px; }
 .builder-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }

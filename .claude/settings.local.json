@@ -349,7 +349,8 @@
       "Bash(PGPASSWORD='Khele@2000' psql -h localhost -p 5433 -U postgres -d postgres -c \"\\\\d dataset_sync_history\")",
       "Bash(grep -rn \"buildCreateTableSql\\\\|CREATE TABLE\\\\|mv_chart_\\\\|CREATE MATERIALIZED VIEW\\\\|ds_\\\\${\" --include=\"*.ts\")",
       "Bash(node -e \"console.log\\(require\\('mssql/package.json'\\).version\\)\")",
-      "Bash(npm view *)"
+      "Bash(npm view *)",
+      "Bash(node -e *)"
     ]
   }
 }

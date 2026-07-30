@@ -505,6 +505,8 @@ export const api = {
       post<{ status: string; full: boolean; dataset?: string }>(
         `/api/sync/run?full=${full}${dataset ? `&dataset=${encodeURIComponent(dataset)}` : ""}`,
       ),
+    cancel: (dataset: string) =>
+      post<{ status: string; dataset: string }>(`/api/sync/cancel?dataset=${encodeURIComponent(dataset)}`),
   },
 
   admin: {

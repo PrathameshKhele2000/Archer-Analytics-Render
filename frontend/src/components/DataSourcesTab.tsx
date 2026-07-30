@@ -86,13 +86,35 @@ export default function DataSourcesTab() {
   const load = () => api.admin.datasets.list().then(setRows).catch((e) => setErr(String(e.message ?? e)));
   useEffect(() => { load(); }, []);
 
+  // The run itself is fire-and-forget on the backend (it has to be — a full sync
+  // can take a long time, far longer than an HTTP call should wait) — so the ONLY
+  // way to know if a dataset is genuinely still syncing, as opposed to that click
+  // having just completed instantly, is to poll real status, same as the Sync tab.
+  const [liveRunning, setLiveRunning] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const poll = () => api.sync.status()
+      .then((rows) => setLiveRunning(new Set(rows.filter((r) => r.last_status === "running").map((r) => r.module_alias))))
+      .catch(() => undefined);
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => clearInterval(t);
+  }, []);
+
   // Full sync for just this one pipe — the global "Run full sync" in Admin -> Sync
   // pulls every dataset, which is rarely what you want while testing one specific
   // dataset's config. Uses the same ?dataset= support the backend already has.
   const runSync = (d: Dataset) => {
     setErr(null); setSyncingKey(d.key);
     api.sync.run(true, d.key)
+      .then(() => setLiveRunning((s) => new Set(s).add(d.key)))
       .catch((e: any) => setErr(e.message ?? `Sync failed for '${d.name}'`))
+      .finally(() => setSyncingKey(null));
+  };
+
+  const stopSync = (d: Dataset) => {
+    setErr(null); setSyncingKey(d.key);
+    api.sync.cancel(d.key)
+      .catch((e: any) => setErr(e.message ?? `Couldn't stop '${d.name}'`))
       .finally(() => setSyncingKey(null));
   };
 
@@ -300,9 +322,15 @@ export default function DataSourcesTab() {
                 <td>
                   <div className="panel-actions">
                     {d.source_table && (
-                      <button onClick={() => runSync(d)} disabled={syncingKey === d.key}>
-                        {syncingKey === d.key ? "Syncing…" : "Run full sync"}
-                      </button>
+                      liveRunning.has(d.key) ? (
+                        <button onClick={() => stopSync(d)} disabled={syncingKey === d.key} className="danger-outline">
+                          {syncingKey === d.key ? "Stopping…" : "Stop sync"}
+                        </button>
+                      ) : (
+                        <button onClick={() => runSync(d)} disabled={syncingKey === d.key}>
+                          {syncingKey === d.key ? "Starting…" : "Run full sync"}
+                        </button>
+                      )
                     )}
                     <button onClick={() => openEdit(d)}>Edit</button>
                     <button onClick={() => remove(d)}>✕</button>

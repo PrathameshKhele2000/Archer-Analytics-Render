@@ -1,4 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { createHash } from "crypto";
+import type { Request as MssqlRequest } from "mssql";
 import { from as copyFrom } from "pg-copy-streams";
 import { CacheService } from "../cache/cache.service";
 import { DbService } from "../database/db.service";
@@ -48,6 +50,35 @@ function toNumber(v: unknown): number | null {
 }
 
 /**
+ * record_id is BIGINT (chosen because Archer's own ContentId is a plain integer,
+ * the common case) — but not every real source key is numeric ("VSR-2024-00123"
+ * style ids exist too). Rather than force every dataset's key column to be a
+ * number, a non-numeric key gets mapped to a stable synthetic bigint instead of
+ * being dropped: the same string always hashes to the same id, so re-syncing the
+ * same source row still upserts correctly rather than duplicating or vanishing.
+ * SHA-256 truncated to 63 bits has a negligible collision chance at any dataset
+ * size this app deals with (10M rows is nowhere near enough to matter).
+ * Numeric keys are untouched — this only ever changes behavior for the rows that
+ * would otherwise have been silently skipped.
+ */
+function stableRecordId(raw: string): bigint {
+  const hash = createHash("sha256").update(raw).digest();
+  let n = 0n;
+  for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(hash[i]);
+  return n & 0x7fffffffffffffffn; // clear the sign bit -> always fits a positive signed bigint
+}
+
+/** The value to key a row on: numeric keys pass through unchanged (existing
+ *  behavior, unaffected); anything else gets a stable hash instead of being
+ *  dropped; a genuinely empty/null key still can't be keyed on at all. */
+function resolveRecordId(raw: unknown): number | bigint | null {
+  const asNumber = toNumber(raw);
+  if (asNumber !== null) return asNumber;
+  const s = raw === null || raw === undefined ? "" : String(raw).trim();
+  return s ? stableRecordId(s) : null;
+}
+
+/**
  * Copies one dataset's rows from the flat Archer reporting feed (MS SQL) into its
  * table here. One pipe at a time, read-only at the source, and idempotent: rows are
  * upserted on the Archer record id, so re-running never duplicates.
@@ -56,6 +87,10 @@ function toNumber(v: unknown): number | null {
 export class DatasetSyncService {
   private readonly log = new Logger(DatasetSyncService.name);
   private running = new Set<string>();
+  // The in-flight MS SQL request for each running dataset, so an admin can cancel
+  // one specific stuck/unwanted sync instead of the only prior option — restarting
+  // the whole backend, which kills every other in-progress sync too.
+  private cancelable = new Map<string, MssqlRequest>();
 
   constructor(
     private readonly db: DbService,
@@ -91,6 +126,21 @@ export class DatasetSyncService {
   /** Which dataset keys are mid-sync right now, per this process's in-memory lock. */
   runningKeys(): string[] {
     return [...this.running];
+  }
+
+  /**
+   * Abort one dataset's in-progress sync without touching any other running sync
+   * or the backend process itself. Cancels the underlying MS SQL request, which
+   * makes the pull's promise reject — the existing error path then does its normal
+   * job: ROLLBACK (nothing partial is left behind), state/history recorded as a
+   * cancelled run, and the in-memory lock released so it can be started again.
+   * Returns false if that dataset isn't actually running (nothing to cancel).
+   */
+  cancelSync(key: string): boolean {
+    const req = this.cancelable.get(key);
+    if (!req) return false;
+    req.cancel();
+    return true;
   }
 
   /** Every dataset the scheduler should pull: active, with a source table configured. */
@@ -155,13 +205,15 @@ export class DatasetSyncService {
       return { rows: total };
     } catch (e: any) {
       const ms = Date.now() - t0;
+      // copy() commits in chunks now (not one all-or-nothing transaction), so
+      // partialRows is the real, currently-in-the-table count on a failure partway
+      // through — earlier chunks already committed and stay committed — not a
+      // guess or an in-flight number that gets wiped by a rollback.
+      const saved = typeof e?.partialRows === "number" ? e.partialRows : 0;
       const msg = e?.message ?? String(e);
-      const partial = typeof e?.partialRows === "number" ? e.partialRows : 0;
-      await this.setState(key, { last_status: "error", last_error: msg, duration_ms: ms, rows_synced: partial });
-      await this.history(key, full ? "full" : "incremental", "error", partial, msg, startedAt, ms);
-      this.log.error(
-        `sync ${key}: DONE — FAILED after ${partial.toLocaleString()} rows, ${(ms / 1000).toFixed(1)}s: ${msg}`,
-      );
+      await this.setState(key, { last_status: "error", last_error: msg, duration_ms: ms, rows_synced: saved });
+      await this.history(key, full ? "full" : "incremental", "error", saved, msg, startedAt, ms);
+      this.log.error(`sync ${key}: DONE — FAILED, ${saved.toLocaleString()} rows saved before the error, ${(ms / 1000).toFixed(1)}s: ${msg}`);
       throw e;
     } finally {
       this.running.delete(key);
@@ -169,21 +221,15 @@ export class DatasetSyncService {
   }
 
   /**
-   * Pull the whole matching result set as ONE streamed MS SQL query, COPY it
-   * straight into a per-run temp staging table (COPY is Postgres's fastest bulk-
-   * load path — no per-row/per-batch SQL parsing or planning), then a single
-   * set-based INSERT...ON CONFLICT moves it into the real table. This replaced an
-   * earlier page-at-a-time approach (1000 rows per round trip) that was fine on a
-   * fast local link but dominated wall-clock time on a slow/high-latency one —
-   * 10M rows at 1000/page is 10,000 MS SQL round trips before counting the work.
-   * Streaming pays that latency once.
-   *
-   * The real table is only ever touched by the final INSERT — everything before
-   * that only writes to the temp table, so dashboards/reports stay fully readable
-   * for the entire (possibly long) pull, not just briefly locked at the very end.
-   * The whole thing runs in one transaction: any failure rolls back cleanly with
-   * zero effect on the real table, and the temp table (ON COMMIT DROP) needs no
-   * manual cleanup either way.
+   * Pull rows as ONE streamed MS SQL query (versus the earlier page-at-a-time
+   * approach, which paid a full network round trip per 1000 rows — 10,000 round
+   * trips for a 10M-row table before counting any actual work), and commit them
+   * into the real table in CHUNKS (via COPY into a temp staging table, then one
+   * set-based INSERT...ON CONFLICT) rather than one giant transaction for the
+   * whole pull. Chunked commits matter for two real reasons: rows actually show
+   * up in the real table as the sync progresses, not only if/when the entire
+   * multi-hour pull finishes — and a failure partway through only loses the
+   * current chunk, not every row pulled so far.
    */
   private async copy(ds: DatasetRow, mappings: MappingRow[], since: Date | null): Promise<number> {
     const cols = mappings.map((m) => m.target_column);
@@ -192,96 +238,113 @@ export class DatasetSyncService {
     }
     const allCols = ["record_id", ...cols];
     const staging = `sync_stage_${ds.key.replace(/[^a-z0-9_]/gi, "_")}`;
+    const updates = cols.map((c) => `${c} = EXCLUDED.${c}`).join(", ");
+    const CHUNK_ROWS = 50_000;
 
-    let total = 0;
+    let total = 0; // rows read from the source so far (progress display + return value)
+    let committed = 0; // rows actually committed into the real table so far
     let maxWatermark: Date | null = since;
-    const client = await this.db.connect();
+    let buffer: string[] = [];
+    let lastLog = Date.now();
+
+    /** COPY one chunk's CSV lines into a fresh staging table, merge into the real
+     *  table, commit — small self-contained transaction, not the whole pull. */
+    const flushChunk = async (lines: string[]): Promise<void> => {
+      if (!lines.length) return;
+      const client = await this.db.connect();
+      try {
+        await client.query("BEGIN");
+        // This chunk's own commit durability only — losing the last few ms of WAL
+        // flush on a crash just means re-syncing this chunk, not real data loss.
+        await client.query("SET LOCAL synchronous_commit = OFF");
+        // The merge below is the only step that touches the real table (and so is
+        // the only step a conflicting lock elsewhere could block) — bounded so a
+        // stray long-running query fails this loudly instead of hanging it.
+        await client.query("SET LOCAL lock_timeout = '60s'");
+        await client.query(`CREATE TEMP TABLE ${staging} (LIKE ${ds.target_table} INCLUDING DEFAULTS) ON COMMIT DROP`);
+        await new Promise<void>((resolve, reject) => {
+          const copyStream = client.query(copyFrom(`COPY ${staging} (${allCols.join(",")}) FROM STDIN WITH (FORMAT csv)`));
+          copyStream.on("error", reject);
+          copyStream.on("finish", () => resolve());
+          copyStream.end(lines.join(""));
+        });
+        await client.query(
+          `INSERT INTO ${ds.target_table} (${allCols.join(", ")})
+           SELECT ${allCols.join(", ")} FROM ${staging}
+           ON CONFLICT (record_id) DO UPDATE SET ${updates}, synced_at = now()`,
+        );
+        await client.query("COMMIT");
+        committed += lines.length;
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw e;
+      } finally {
+        client.release();
+      }
+    };
+
+    const { request, done } = await this.source.streamQuery({
+      table: ds.source_table!, watermarkColumn: ds.watermark_column, since,
+    });
+    this.cancelable.set(ds.key, request);
+
     try {
-      await client.query("BEGIN");
-      // This run's own commit durability only — a crash losing the last few ms of
-      // WAL flush for THIS transaction just means re-syncing, not real data loss,
-      // and it's a meaningful speedup for a transaction this size.
-      await client.query("SET LOCAL synchronous_commit = OFF");
-      // The streaming/staging phase never touches the real table, so it can't be
-      // blocked by anything holding a lock on it — but the final merge below does,
-      // and without a bound, a stray long-running query elsewhere (a report, a
-      // manual admin query) holding a conflicting lock would hang this indefinitely
-      // too. 60s is generous for a lock wait that should normally be instant; if
-      // it's not free within that, something is genuinely wrong and the sync should
-      // fail loudly rather than queue silently behind it.
-      await client.query("SET LOCAL lock_timeout = '60s'");
-      // Mirrors the real table's columns/types exactly (so COPY parses each field
-      // with the correct type-specific parser, no manual casting needed) — but
-      // fresh and unindexed, which is what makes COPY into it fast.
-      await client.query(`CREATE TEMP TABLE ${staging} (LIKE ${ds.target_table} INCLUDING DEFAULTS) ON COMMIT DROP`);
-
-      const { request, done } = await this.source.streamQuery({
-        table: ds.source_table!, watermarkColumn: ds.watermark_column, since,
-      });
-
-      let lastLog = Date.now();
+      let pendingFlush: Promise<void> = Promise.resolve();
+      let failed = false;
       await new Promise<void>((resolve, reject) => {
-        const copyStream = client.query(copyFrom(`COPY ${staging} (${allCols.join(",")}) FROM STDIN WITH (FORMAT csv)`));
-        let settled = false;
-        const settle = (err?: any) => {
-          if (settled) return;
-          settled = true;
-          err ? reject(err) : resolve();
+        const fail = (err: any) => {
+          if (failed) return;
+          failed = true;
+          reject(err);
         };
-        copyStream.on("error", settle);
-        copyStream.on("finish", () => settle());
 
         request.on("row", (row: any) => {
-          const recordId = toNumber(row[ds.key_column]);
-          if (recordId === null) return; // no Archer record id -> can't upsert it safely
+          const recordId = resolveRecordId(row[ds.key_column]);
+          if (recordId === null) return; // genuinely empty key -> nothing to safely upsert on
           total++;
           if (ds.watermark_column) {
             const d = toDate(row[ds.watermark_column]);
             if (d && (!maxWatermark || d > maxWatermark)) maxWatermark = d;
           }
           const vals = [recordId, ...mappings.map((m) => this.convert(row[m.archer_field_name], m.transform))];
-          const ok = copyStream.write(vals.map(csvField).join(",") + "\n");
-          if (!ok) {
-            request.pause();
-            copyStream.once("drain", () => request.resume());
-          }
+          buffer.push(vals.map(csvField).join(",") + "\n");
+
           // Proof-of-life: with no other progress signal, a genuinely working sync
           // and a silently stuck one look identical from the outside. A line every
           // ~10s makes that observable instead of just waiting and hoping.
           if (Date.now() - lastLog > 10_000) {
-            this.log.log(`sync ${ds.key}: ${total} rows so far (still running)…`);
+            this.log.log(`sync ${ds.key}: ${total} rows read, ${committed} committed so far (still running)…`);
             lastLog = Date.now();
           }
-        });
-        request.on("error", (err: any) => { copyStream.destroy(err); settle(err); });
-        done.then(() => copyStream.end()).catch((err) => { copyStream.destroy(err); settle(err); });
-      });
 
-      // The MS SQL pull is done at this point — total won't climb any further —
-      // but a 10M-row merge into the real table is itself not instant, and prints
-      // nothing on its own. Without this line, "rows so far" stops climbing and it
-      // looks stuck again for however long this next step takes.
-      this.log.log(`sync ${ds.key}: ${total} rows staged, merging into ${ds.target_table}…`);
-      if (total > 0) {
-        const t1 = Date.now();
-        const updates = cols.map((c) => `${c} = EXCLUDED.${c}`).join(", ");
-        await client.query(
-          `INSERT INTO ${ds.target_table} (${allCols.join(", ")})
-           SELECT ${allCols.join(", ")} FROM ${staging}
-           ON CONFLICT (record_id) DO UPDATE SET ${updates}, synced_at = now()`,
-        );
-        this.log.log(`sync ${ds.key}: merge done in ${((Date.now() - t1) / 1000).toFixed(1)}s`);
-      }
-      await client.query("COMMIT");
+          if (buffer.length >= CHUNK_ROWS) {
+            request.pause(); // no more rows arrive until this chunk finishes committing
+            const chunk = buffer;
+            buffer = [];
+            pendingFlush = flushChunk(chunk)
+              .then(() => { request.resume(); })
+              .catch(fail);
+          }
+        });
+        request.on("error", fail);
+        done
+          .then(async () => {
+            await pendingFlush; // let any in-flight chunk finish first
+            await flushChunk(buffer); // the final, partial chunk
+            buffer = [];
+            resolve();
+          })
+          .catch(fail);
+      });
     } catch (e: any) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      // A failure partway through shouldn't hide the rows that were already staged
-      // — the caller reports this as the row count on the failed run, instead of a
-      // flat 0 that makes real progress look like none happened at all.
-      e.partialRows = total;
+      // Unlike total (rows merely read off the wire), committed is only ever
+      // incremented after a chunk's own COMMIT succeeds — so on failure it's the
+      // real, currently-in-the-table count, not a guess. The caller reports this
+      // as rows_synced, since with chunked commits it's now actually accurate.
+      e.partialRows = committed;
       throw e;
     } finally {
-      client.release();
+      this.cancelable.delete(ds.key);
     }
 
     if (maxWatermark) await this.setState(ds.key, { last_watermark: maxWatermark });

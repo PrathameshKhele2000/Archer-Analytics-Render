@@ -66,4 +66,14 @@ export class SyncController {
     void this.sync.syncAll(isFull).catch(() => undefined);
     return { status: "started", full: isFull };
   }
+
+  /** Stop one dataset's in-progress sync — doesn't touch any other running sync. */
+  @Post("sync/cancel")
+  @Permissions("sync:run")
+  cancel(@Query("dataset") dataset: string) {
+    if (!dataset) throw new BadRequestException("dataset is required");
+    const ok = this.sync.cancelSync(dataset);
+    if (!ok) throw new BadRequestException(`'${dataset}' isn't currently running`);
+    return { status: "cancelling", dataset };
+  }
 }
