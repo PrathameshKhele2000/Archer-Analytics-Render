@@ -46,16 +46,20 @@ export class SyncController {
    */
   @Post("sync/run")
   @Permissions("sync:run")
-  run(@Query("full") full?: string, @Query("dataset") dataset?: string) {
+  run(@Query("full") full?: string, @Query("dataset") dataset?: string, @Query("truncate") truncate?: string) {
     const isFull = (full ?? "").toLowerCase() === "true";
+    const isTruncate = (truncate ?? "").toLowerCase() === "true";
+    if (isTruncate && !dataset) {
+      throw new BadRequestException("Truncate & Sync must target one specific dataset");
+    }
     if (dataset) {
       if (this.sync.runningKeys().includes(dataset)) {
         throw new BadRequestException(
           `Sync for '${dataset}' is already running. If it's been stuck for a long time, restart the backend to clear it.`,
         );
       }
-      void this.sync.syncDataset(dataset, isFull).catch(() => undefined);
-      return { status: "started", dataset, full: isFull };
+      void this.sync.syncDataset(dataset, isFull, isTruncate).catch(() => undefined);
+      return { status: "started", dataset, full: isFull || isTruncate, truncate: isTruncate };
     }
     const already = this.sync.runningKeys();
     if (already.length) {

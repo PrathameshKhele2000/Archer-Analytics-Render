@@ -639,6 +639,28 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
   padding: 12px 18px; background: var(--surface); border-top: 1px solid var(--hairline); }
 .create-card.in-modal { border: none; padding: 0; max-width: none; margin: 0; }
 
+/* ---- Chart Expand modal ----
+   A dashboard panel is a fixed ~300px box — fine for a glance, too small to read a
+   chart with many bars/categories or a table with more than a handful of rows. The
+   Expand button reopens the SAME widget inside this much bigger modal. Sizing is a
+   real flex chain (not just a bigger fixed box) so the chart/table actually fills
+   whatever room the modal has, instead of leaving dead space or needing its own
+   scrollbar-within-a-scrollbar. */
+.modal.chart-modal { width: min(1400px, 96vw); max-width: 96vw; height: 88vh; max-height: 88vh; }
+.modal.chart-modal .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chart-expand { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chart-expand > .panel-caption { flex: none; }
+/* A bare LegacyChart <div class="chart"> sits directly under .chart-expand; anything
+   ECharts-driven from GenericChart goes through .drill-expand instead (below), so this
+   only ever matches the legacy case. */
+.chart-expand > .chart:not(.chart-table) { flex: 1; min-height: 0; height: auto; }
+.chart-expand .records-table { max-height: 70vh; }
+.drill-expand { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.drill-expand > .drill-bar, .drill-expand > p { flex: none; }
+.drill-expand > .chart-wrap, .drill-expand > .chart-table, .drill-expand > .records-table {
+  flex: 1; min-height: 0; }
+.drill-expand .records-table { max-height: none; }
+
 /* ---- Report header + advanced filter builder ---- */
 .report-head { display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 16px; border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }

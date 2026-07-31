@@ -350,7 +350,10 @@
       "Bash(grep -rn \"buildCreateTableSql\\\\|CREATE TABLE\\\\|mv_chart_\\\\|CREATE MATERIALIZED VIEW\\\\|ds_\\\\${\" --include=\"*.ts\")",
       "Bash(node -e \"console.log\\(require\\('mssql/package.json'\\).version\\)\")",
       "Bash(npm view *)",
-      "Bash(node -e *)"
+      "Bash(node -e *)",
+      "Bash(psql -U postgres -lqt)",
+      "Bash(pg_isready)",
+      "Bash(lsof -iTCP -sTCP:LISTEN -P)"
     ]
   }
 }

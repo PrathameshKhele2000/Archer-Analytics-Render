@@ -14,6 +14,11 @@ const GRID = { left: 56, right: 20, top: 24, bottom: 40, containLabel: true };
 // truncating to a fixed width chosen without reference to actual bar spacing just
 // moves the overlap from "some labels missing" to "some labels colliding".
 const PX_PER_CATEGORY = 34;
+// The Expand modal has vastly more room than a ~300px dashboard panel — reusing the
+// same 34px-per-category minimum there would keep every label truncated to 2-3
+// characters even when there's plenty of width to spare. A bigger guaranteed minimum
+// applies only in that context, so labels actually get to use the extra space.
+const PX_PER_CATEGORY_EXPANDED = 90;
 const MAX_CANVAS_PX = 24_000;
 /**
  * Chart colour themes. `default` is the original house palette; the rest are ordered
@@ -146,8 +151,9 @@ const AXIS_NAME_STYLE = { ...FONT, fontWeight: 600 as const };
 
 function buildCartesian(
   rows: QueryRow[], type: "bar" | "line", horizontal: boolean, area: boolean, hidden: Set<string>,
-  palette: string[], showLegend: boolean, catLabel?: string, valLabel?: string,
+  palette: string[], showLegend: boolean, catLabel?: string, valLabel?: string, expanded?: boolean,
 ): echarts.EChartsOption {
+  const pxPerCategory = expanded ? PX_PER_CATEGORY_EXPANDED : PX_PER_CATEGORY;
   const hasSeries = rows.some((r) => r.series != null);
   const seriesNames = hasSeries ? uniq(rows.map((r) => r.series)) : ["value"];
   const singleBar = !hasSeries && type === "bar"; // single-series bar/column → color each bar
@@ -201,7 +207,7 @@ function buildCartesian(
   // when there are few. Horizontal bars don't have this squeeze at all (each
   // category is its own row, stacked vertically, not fighting neighbors for
   // horizontal room), so they get a generous, constant width instead.
-  const catLabelWidth = horizontal || cats.length < 2 ? 140 : PX_PER_CATEGORY - 6;
+  const catLabelWidth = horizontal || cats.length < 2 ? 140 : pxPerCategory - 6;
   const catAxis = {
     type: "category" as const, data: cats,
     // Long category names ("Cross-Site Scripting (Reflected) in Login Form") would
@@ -214,9 +220,13 @@ function buildCartesian(
     axisLabel: { ...FONT, overflow: "truncate" as const, width: catLabelWidth, ellipsis: "…", interval: 0 },
     name: catLabel, nameLocation: "middle" as const, nameGap: 32, nameTextStyle: AXIS_NAME_STYLE,
   };
+  // No axis title here on purpose — the value axis is always a plain count/measure
+  // ("Count", "Total", …), and repeating that word next to every chart added noise
+  // without adding information the tick numbers don't already give. The category
+  // axis keeps its name (the actual field/level being shown), which does convey
+  // real information.
   const valAxis = {
     type: "value" as const, axisLabel: FONT, splitLine: { lineStyle: { color: "#eef0ed" } },
-    name: valLabel, nameLocation: "middle" as const, nameGap: 44, nameTextStyle: AXIS_NAME_STYLE,
   };
   // ECharts keys a cartesian legend by SERIES name, so only a split-by chart has one.
   const legendVals = hasSeries ? seriesNames : [];
@@ -269,9 +279,9 @@ function buildPie(
  * canvas — beyond that the bars do get thinner, which is the honest outcome for a
  * chart with thousands of categories.
  */
-function scrollWidth(categories: number): number | undefined {
+function scrollWidth(categories: number, pxPerCategory = PX_PER_CATEGORY): number | undefined {
   if (categories < 2) return undefined;
-  return Math.min(MAX_CANVAS_PX, categories * PX_PER_CATEGORY);
+  return Math.min(MAX_CANVAS_PX, categories * pxPerCategory);
 }
 
 function useEchartsPanel(
@@ -320,7 +330,7 @@ export function SeriesLegend({
  * show/hide dropdown. Always calls hooks (Rules of Hooks).
  */
 function ChartWithLegend({
-  type, rows, showLegend, theme, onSliceClick, hidden: controlledHidden, onToggleHidden, categoryLabel, valueLabel,
+  type, rows, showLegend, theme, onSliceClick, hidden: controlledHidden, onToggleHidden, categoryLabel, valueLabel, expanded,
 }: {
   type: string; rows: QueryRow[]; showLegend?: boolean; theme?: string | null;
   onSliceClick?: (name: string) => void; hidden?: Set<string>;
@@ -330,6 +340,8 @@ function ChartWithLegend({
   // bar chart swaps them), so naming these "x"/"y" here would silently mean the
   // opposite of what the caller intended for that one chart type.
   categoryLabel?: string; valueLabel?: string;
+  /** Rendering inside the big Expand modal — categories get more guaranteed room. */
+  expanded?: boolean;
 }) {
   const [internalHidden, setInternalHidden] = useState<Set<string>>(new Set());
   // When a parent supplies `hidden` it owns the show/hide state (its dropdown lives
@@ -351,20 +363,22 @@ function ChartWithLegend({
   const option = useMemo<echarts.EChartsOption | null>(() => {
     if (!rows.length) return null;
     switch (type) {
-      case "bar": return buildCartesian(rows, "bar", true, false, hidden, palette, wantsLegend, categoryLabel, valueLabel);
-      case "column": return buildCartesian(rows, "bar", false, false, hidden, palette, wantsLegend, categoryLabel, valueLabel);
-      case "line": return buildCartesian(rows, "line", false, false, hidden, palette, wantsLegend, categoryLabel, valueLabel);
-      case "area": return buildCartesian(rows, "line", false, true, hidden, palette, wantsLegend, categoryLabel, valueLabel);
+      case "bar": return buildCartesian(rows, "bar", true, false, hidden, palette, wantsLegend, categoryLabel, valueLabel, expanded);
+      case "column": return buildCartesian(rows, "bar", false, false, hidden, palette, wantsLegend, categoryLabel, valueLabel, expanded);
+      case "line": return buildCartesian(rows, "line", false, false, hidden, palette, wantsLegend, categoryLabel, valueLabel, expanded);
+      case "area": return buildCartesian(rows, "line", false, true, hidden, palette, wantsLegend, categoryLabel, valueLabel, expanded);
       case "pie": return buildPie(rows, false, hidden, palette, wantsLegend);
       case "donut": return buildPie(rows, true, hidden, palette, wantsLegend);
       default: return null;
     }
-  }, [type, rows, hidden, palette, wantsLegend, categoryLabel, valueLabel]);
+  }, [type, rows, hidden, palette, wantsLegend, categoryLabel, valueLabel, expanded]);
 
   // Only a category axis needs room per value; pie/donut have no axis to crowd.
   const cartesian = ["bar", "column", "line", "area"].includes(type);
   // A horizontal bar chart grows DOWNWARD with categories, so widening it doesn't help.
-  const minWidth = cartesian && type !== "bar" ? scrollWidth(uniq(rows.map((r) => r.x)).length) : undefined;
+  const minWidth = cartesian && type !== "bar"
+    ? scrollWidth(uniq(rows.map((r) => r.x)).length, expanded ? PX_PER_CATEGORY_EXPANDED : PX_PER_CATEGORY)
+    : undefined;
 
   const panel = useEchartsPanel(option, `${type} chart`, onSliceClick, toggle, minWidth);
   return (
@@ -409,9 +423,11 @@ interface GenericChartProps {
    *  see the note on ChartWithLegend's matching props for why. */
   categoryLabel?: string;
   valueLabel?: string;
+  /** Rendering inside the big Expand modal — categories get more guaranteed room. */
+  expanded?: boolean;
 }
 
-export default function GenericChart({ type, rows: rawRows, showLegend, theme, onSliceClick, hidden, onToggleHidden, clauseLevels, categoryLabel, valueLabel }: GenericChartProps) {
+export default function GenericChart({ type, rows: rawRows, showLegend, theme, onSliceClick, hidden, onToggleHidden, clauseLevels, categoryLabel, valueLabel, expanded }: GenericChartProps) {
   let rows = rawRows;
   // Group & Count (clause) rows carry one column per grouping level: g0, g1, ... + y.
   const isClauseRows = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], "g0");
@@ -481,6 +497,6 @@ export default function GenericChart({ type, rows: rawRows, showLegend, theme, o
   return (
     <ChartWithLegend type={type} rows={rows} showLegend={showLegend} theme={theme}
                      onSliceClick={onSliceClick} hidden={hidden} onToggleHidden={onToggleHidden}
-                     categoryLabel={categoryLabel} valueLabel={valueLabel} />
+                     categoryLabel={categoryLabel} valueLabel={valueLabel} expanded={expanded} />
   );
 }

@@ -169,11 +169,15 @@ export class DatasetSyncService {
     return out;
   }
 
-  async syncDataset(key: string, full = false): Promise<{ rows: number }> {
+  async syncDataset(key: string, full = false, replace = false): Promise<{ rows: number }> {
     if (this.running.has(key)) throw new BadRequestException(`Sync for '${key}' is already running`);
     this.running.add(key);
     const startedAt = new Date();
     const t0 = Date.now();
+    // Truncate & Sync always pulls everything — "since the watermark" doesn't mean
+    // anything when the target table is about to be wholesale replaced anyway.
+    if (replace) full = true;
+    const kind = replace ? "truncate" : full ? "full" : "incremental";
 
     try {
       const ds = await this.datasetByKey(key);
@@ -185,14 +189,14 @@ export class DatasetSyncService {
       }
 
       await this.setState(key, { last_status: "running", last_run_at: startedAt });
-      this.log.log(`sync ${key} starting (${full ? "full" : "incremental"}), key=${ds.key_column}, watermark=${ds.watermark_column ?? "none"}`);
+      this.log.log(`sync ${key} starting (${kind}), key=${ds.key_column}, watermark=${ds.watermark_column ?? "none"}`);
 
       const since = full ? null : await this.watermark(key);
-      const total = await this.copy(ds, mappings, since);
+      const total = await this.copy(ds, mappings, since, replace);
 
       const ms = Date.now() - t0;
       await this.setState(key, { last_status: "ok", rows_synced: total, duration_ms: ms, last_error: null });
-      await this.history(key, full ? "full" : "incremental", "ok", total, null, startedAt, ms);
+      await this.history(key, kind, "ok", total, null, startedAt, ms);
 
       // Fresh data -> chart matviews and cached pages must be rebuilt.
       if (total > 0) {
@@ -200,19 +204,20 @@ export class DatasetSyncService {
         await this.refreshDerived(key, ds.target_table);
       }
       this.log.log(
-        `sync ${key}: DONE — ok, ${total.toLocaleString()} rows in ${(ms / 1000).toFixed(1)}s (${full ? "full" : "incremental"})`,
+        `sync ${key}: DONE — ok, ${total.toLocaleString()} rows in ${(ms / 1000).toFixed(1)}s (${kind})`,
       );
       return { rows: total };
     } catch (e: any) {
       const ms = Date.now() - t0;
-      // copy() commits in chunks now (not one all-or-nothing transaction), so
-      // partialRows is the real, currently-in-the-table count on a failure partway
-      // through — earlier chunks already committed and stay committed — not a
-      // guess or an in-flight number that gets wiped by a rollback.
+      // copy() commits in chunks now (not one all-or-nothing transaction), so for a
+      // normal sync partialRows is the real, currently-in-the-table count on a
+      // failure partway through. For Truncate & Sync, copy() reports 0 here instead
+      // — the real table is never touched until the very end, so a failed reload
+      // leaves it exactly as it was before the run started.
       const saved = typeof e?.partialRows === "number" ? e.partialRows : 0;
       const msg = e?.message ?? String(e);
       await this.setState(key, { last_status: "error", last_error: msg, duration_ms: ms, rows_synced: saved });
-      await this.history(key, full ? "full" : "incremental", "error", saved, msg, startedAt, ms);
+      await this.history(key, kind, "error", saved, msg, startedAt, ms);
       this.log.error(`sync ${key}: DONE — FAILED, ${saved.toLocaleString()} rows saved before the error, ${(ms / 1000).toFixed(1)}s: ${msg}`);
       throw e;
     } finally {
@@ -231,7 +236,7 @@ export class DatasetSyncService {
    * multi-hour pull finishes — and a failure partway through only loses the
    * current chunk, not every row pulled so far.
    */
-  private async copy(ds: DatasetRow, mappings: MappingRow[], since: Date | null): Promise<number> {
+  private async copy(ds: DatasetRow, mappings: MappingRow[], since: Date | null, replace = false): Promise<number> {
     const cols = mappings.map((m) => m.target_column);
     for (const c of [...cols, ds.target_table]) {
       if (!ID_RE.test(c)) throw new BadRequestException(`Unsafe identifier '${c}'`);
@@ -241,14 +246,33 @@ export class DatasetSyncService {
     const updates = cols.map((c) => `${c} = EXCLUDED.${c}`).join(", ");
     const CHUNK_ROWS = 50_000;
 
+    // Truncate & Sync accumulates into a separate REGULAR table across the whole
+    // pull instead of merging into the real table chunk by chunk — a temp table
+    // won't do here, since each chunk uses its OWN connection and a temp table
+    // only lives as long as the connection that created it. Nothing touches the
+    // real table until the very end, which is what makes this safe: if the pull
+    // fails at row 9 million of 10, the real table still has 100% of its old data,
+    // completely untouched — only a fully successful pull ever reaches the swap.
+    const reload = replace ? `sync_reload_${ds.key.replace(/[^a-z0-9_]/gi, "_")}` : null;
+    const writeTarget = reload ?? ds.target_table;
+    if (reload) {
+      await this.db.query(`DROP TABLE IF EXISTS ${reload}`);
+      // INCLUDING INDEXES carries over the primary key (record_id) as a real unique
+      // constraint on the reload table, not just DEFAULTS — without it, flushChunk's
+      // "ON CONFLICT (record_id)" merge below has nothing to conflict against and
+      // fails outright on the very first chunk.
+      await this.db.query(`CREATE TABLE ${reload} (LIKE ${ds.target_table} INCLUDING DEFAULTS INCLUDING INDEXES)`);
+    }
+
     let total = 0; // rows read from the source so far (progress display + return value)
-    let committed = 0; // rows actually committed into the real table so far
+    let committed = 0; // rows actually committed so far (into writeTarget, not necessarily the real table yet)
     let maxWatermark: Date | null = since;
     let buffer: string[] = [];
     let lastLog = Date.now();
 
-    /** COPY one chunk's CSV lines into a fresh staging table, merge into the real
-     *  table, commit — small self-contained transaction, not the whole pull. */
+    /** COPY one chunk's CSV lines into a fresh staging table, merge into writeTarget
+     *  (the real table normally, or the reload table for Truncate & Sync), commit —
+     *  small self-contained transaction, not the whole pull. */
     const flushChunk = async (lines: string[]): Promise<void> => {
       if (!lines.length) return;
       const client = await this.db.connect();
@@ -257,9 +281,9 @@ export class DatasetSyncService {
         // This chunk's own commit durability only — losing the last few ms of WAL
         // flush on a crash just means re-syncing this chunk, not real data loss.
         await client.query("SET LOCAL synchronous_commit = OFF");
-        // The merge below is the only step that touches the real table (and so is
-        // the only step a conflicting lock elsewhere could block) — bounded so a
-        // stray long-running query fails this loudly instead of hanging it.
+        // The merge below is the only step that touches writeTarget (and so is the
+        // only step a conflicting lock elsewhere could block) — bounded so a stray
+        // long-running query fails this loudly instead of hanging it.
         await client.query("SET LOCAL lock_timeout = '60s'");
         await client.query(`CREATE TEMP TABLE ${staging} (LIKE ${ds.target_table} INCLUDING DEFAULTS) ON COMMIT DROP`);
         await new Promise<void>((resolve, reject) => {
@@ -268,8 +292,13 @@ export class DatasetSyncService {
           copyStream.on("finish", () => resolve());
           copyStream.end(lines.join(""));
         });
+        // ON CONFLICT here isn't about incremental upserts when writeTarget is the
+        // reload table (it starts empty) — it's a safety net against the source
+        // handing back the same key twice across two different chunks, which would
+        // otherwise violate the primary key and abort a reload that was otherwise
+        // completely fine.
         await client.query(
-          `INSERT INTO ${ds.target_table} (${allCols.join(", ")})
+          `INSERT INTO ${writeTarget} (${allCols.join(", ")})
            SELECT ${allCols.join(", ")} FROM ${staging}
            ON CONFLICT (record_id) DO UPDATE SET ${updates}, synced_at = now()`,
         );
@@ -336,15 +365,52 @@ export class DatasetSyncService {
           })
           .catch(fail);
       });
+
+      // Everything pulled cleanly — now do the one thing that actually touches the
+      // real table: swap the freshly reloaded copy in. This is intentionally the
+      // ONLY moment the real table changes for Truncate & Sync, and it's fast (a
+      // TRUNCATE + a straight INSERT...SELECT with no per-row work), so the window
+      // where the real table is momentarily unavailable to readers is as short as
+      // possible — not the whole multi-minute pull, just this final step.
+      if (reload) {
+        // A zero-row pull is far more likely to mean "the source query came back
+        // empty because of a transient hiccup" than "the source table is now
+        // genuinely empty" — swapping that in would silently wipe out every
+        // existing row with nothing to show for it. Refuse instead: the real table
+        // is left exactly as it was (this throws before the swap ever runs), same
+        // as any other failed reload.
+        if (total === 0) {
+          throw new BadRequestException(
+            `Truncate & Sync aborted: the source query for '${ds.key}' returned 0 rows. Refusing to replace existing data with an empty result — check the source connection/query.`,
+          );
+        }
+        this.log.log(`sync ${ds.key}: pull complete, swapping in ${total.toLocaleString()} fresh rows…`);
+        const client = await this.db.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query("SET LOCAL lock_timeout = '60s'");
+          await client.query(`TRUNCATE ${ds.target_table}`);
+          await client.query(`INSERT INTO ${ds.target_table} SELECT * FROM ${reload}`);
+          await client.query("COMMIT");
+        } catch (e) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw e;
+        } finally {
+          client.release();
+        }
+      }
     } catch (e: any) {
       // Unlike total (rows merely read off the wire), committed is only ever
-      // incremented after a chunk's own COMMIT succeeds — so on failure it's the
-      // real, currently-in-the-table count, not a guess. The caller reports this
-      // as rows_synced, since with chunked commits it's now actually accurate.
-      e.partialRows = committed;
+      // incremented after a chunk's own COMMIT succeeds. For a normal sync that's
+      // the real, currently-in-the-table count. For Truncate & Sync it's rows
+      // staged in the reload table, not (yet) in the real one — the real table's
+      // actual row count on a failed reload is whatever it was before this run
+      // started, since the swap above never ran.
+      e.partialRows = reload ? 0 : committed;
       throw e;
     } finally {
       this.cancelable.delete(ds.key);
+      if (reload) await this.db.query(`DROP TABLE IF EXISTS ${reload}`).catch(() => undefined);
     }
 
     if (maxWatermark) await this.setState(ds.key, { last_watermark: maxWatermark });

@@ -118,6 +118,25 @@ export default function DataSourcesTab() {
       .finally(() => setSyncingKey(null));
   };
 
+  // Unlike Run full sync (upsert-only — a row deleted at the source just stays
+  // behind here forever), Truncate & Sync replaces the table wholesale, so rows
+  // removed at the source disappear here too. It's still safe if it fails partway:
+  // the backend pulls the fresh copy into a holding table first and only swaps it
+  // in once the ENTIRE pull has succeeded, so a failed run leaves the existing
+  // table completely untouched — never a truncate followed by a broken/partial
+  // reload. Confirmed up front regardless, since "replaces the whole table" is
+  // the kind of thing that shouldn't happen from a misclick.
+  const runTruncateSync = (d: Dataset) => {
+    if (!confirm(
+      `Truncate & Sync '${d.name}'?\n\nThis replaces the entire local table with a fresh pull from the source — records deleted at the source will be removed here too. The existing data stays untouched unless the whole pull succeeds.`,
+    )) return;
+    setErr(null); setSyncingKey(d.key);
+    api.sync.run(true, d.key, true)
+      .then(() => setLiveRunning((s) => new Set(s).add(d.key)))
+      .catch((e: any) => setErr(e.message ?? `Truncate & Sync failed for '${d.name}'`))
+      .finally(() => setSyncingKey(null));
+  };
+
   const patchField = (i: number, patch: Partial<DatasetFieldDef>) =>
     setDraft((d) => d && ({ ...d, fields: d.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }));
 
@@ -335,9 +354,15 @@ export default function DataSourcesTab() {
                           {syncingKey === d.key ? "Stopping…" : "Stop sync"}
                         </button>
                       ) : (
-                        <button onClick={() => runSync(d)} disabled={syncingKey === d.key}>
-                          {syncingKey === d.key ? "Starting…" : "Run full sync"}
-                        </button>
+                        <>
+                          <button onClick={() => runSync(d)} disabled={syncingKey === d.key}>
+                            {syncingKey === d.key ? "Starting…" : "Run full sync"}
+                          </button>
+                          <button onClick={() => runTruncateSync(d)} disabled={syncingKey === d.key}
+                                  className="danger-outline" title="Replace the whole table with a fresh pull — deletions at the source are reflected here too">
+                            {syncingKey === d.key ? "Starting…" : "Truncate & Sync"}
+                          </button>
+                        </>
                       )
                     )}
                     <button onClick={() => openEdit(d)}>Edit</button>

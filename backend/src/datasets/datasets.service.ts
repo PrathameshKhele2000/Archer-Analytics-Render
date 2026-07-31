@@ -460,6 +460,13 @@ export class DatasetsService {
     await this.db.query(`DELETE FROM field_mapping WHERE source = $1`, [dataset.key]);
     // Remove this dataset's reports/views (their columns + access cascade).
     await this.db.query(`DELETE FROM reports WHERE dataset_key = $1`, [dataset.key]);
+    // dataset_sync_state/dataset_sync_history key on dataset_key as plain TEXT, not
+    // a real foreign key (see db/dataset_sync.sql) — deleting the dataset row above
+    // wouldn't touch them, leaving a "ghost" pipe behind in the Sync tab and Sync
+    // History that no longer corresponds to anything, with no way to tell it apart
+    // from a real one still worth investigating.
+    await this.db.query(`DELETE FROM dataset_sync_state WHERE dataset_key = $1`, [dataset.key]);
+    await this.db.query(`DELETE FROM dataset_sync_history WHERE dataset_key = $1`, [dataset.key]);
     await this.db.query(`DELETE FROM dataset WHERE id = $1`, [id]); // fields cascade
     this.catalogs.invalidate(dataset.key);
     this.log.log(

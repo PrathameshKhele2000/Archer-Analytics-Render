@@ -14,7 +14,7 @@ const humanize = (k?: string | null) => (k ? k.replace(/_/g, " ").replace(/^./, 
  *  un-capped result set the export uses, which can be thousands of rows; rendering
  *  every one as a real DOM row would make the browser crawl, so only the rows
  *  actually in the viewport get mounted, same as DataSets/Views tables already do. */
-function RecordsTable({ rows }: { rows: Finding[] }) {
+function RecordsTable({ rows, expanded }: { rows: Finding[]; expanded?: boolean }) {
   if (!rows.length) return <div className="loading">No records for this selection.</div>;
   const keys = Object.keys(rows[0]);
   const columns: VCol[] = keys.map((k) => ({ key: k, label: humanize(k), width: 180 }));
@@ -24,6 +24,10 @@ function RecordsTable({ rows }: { rows: Finding[] }) {
         columns={columns}
         rows={rows}
         renderCell={(key, row) => formatCell(row[key])}
+        // The expanded modal has far more vertical room than a dashboard panel —
+        // taller than the default 560px window lets more rows show at once instead
+        // of just leaving the extra space empty.
+        height={expanded ? 620 : undefined}
       />
     </div>
   );
@@ -36,11 +40,13 @@ function RecordsTable({ rows }: { rows: Finding[] }) {
  *    to the next level, and clicking at the deepest level shows the raw records.
  */
 export default function DrilldownChart({
-  dashboardKey, widget, baseRows,
+  dashboardKey, widget, baseRows, expanded,
 }: {
   dashboardKey: string;
   widget: DashboardWidget;
   baseRows: QueryRow[];
+  /** Rendering inside the expanded/full-size modal rather than a small dashboard panel. */
+  expanded?: boolean;
 }) {
   const spec = widget.config;
   // In Grouping mode the group-by levels ARE the drill hierarchy; otherwise it's the
@@ -186,7 +192,7 @@ export default function DrilldownChart({
   const crumbs = records ? records.steps : steps;
 
   return (
-    <div ref={wrapRef}>
+    <div ref={wrapRef} className={expanded ? "drill-expand" : undefined}>
       <div className="drill-bar">
         <button className={`view-toggle${tableView ? " on" : ""}`} onClick={() => setTableView((v) => !v)}
                 title="Switch between chart and table">
@@ -235,7 +241,7 @@ export default function DrilldownChart({
               This selection has more than {records.rows.length.toLocaleString()} records — showing the first {records.rows.length.toLocaleString()}. Export for the complete set.
             </p>
           )}
-          <RecordsTable rows={records.rows} />
+          <RecordsTable rows={records.rows} expanded={expanded} />
         </>
       ) : tableView ? (
         <GenericChart type="table" rows={rows} />
@@ -256,6 +262,7 @@ export default function DrilldownChart({
           // as steps grows with each drill click, since this re-renders every click.
           categoryLabel={humanize(sequence[steps.length]) || "Category"}
           valueLabel={humanize(spec.measure) || "Value"}
+          expanded={expanded}
         />
       )}
     </div>

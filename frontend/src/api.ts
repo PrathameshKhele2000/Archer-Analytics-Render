@@ -501,9 +501,9 @@ export const api = {
   sync: {
     status: () => get<SyncState[]>("/api/sync/status"),
     history: (limit = 25) => get<SyncHistoryRow[]>(`/api/sync/history?limit=${limit}`),
-    run: (full = false, dataset?: string) =>
-      post<{ status: string; full: boolean; dataset?: string }>(
-        `/api/sync/run?full=${full}${dataset ? `&dataset=${encodeURIComponent(dataset)}` : ""}`,
+    run: (full = false, dataset?: string, truncate = false) =>
+      post<{ status: string; full: boolean; dataset?: string; truncate?: boolean }>(
+        `/api/sync/run?full=${full}${dataset ? `&dataset=${encodeURIComponent(dataset)}` : ""}${truncate ? "&truncate=true" : ""}`,
       ),
     cancel: (dataset: string) =>
       post<{ status: string; dataset: string }>(`/api/sync/cancel?dataset=${encodeURIComponent(dataset)}`),

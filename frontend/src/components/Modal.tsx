@@ -2,12 +2,13 @@ import { ReactNode, useEffect } from "react";
 
 /** Centered modal dialog. Closes on backdrop click or Escape. */
 export default function Modal({
-  title, onClose, children, wide,
+  title, onClose, children, wide, className,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  className?: string;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -21,7 +22,7 @@ export default function Modal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className={`modal${wide ? " wide" : ""}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className={`modal${wide ? " wide" : ""}${className ? ` ${className}` : ""}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="modal-head">
           <h3>{title}</h3>
           <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>

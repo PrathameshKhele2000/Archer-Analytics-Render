@@ -1,8 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
-import { api, ChartSpec, DashboardShell } from "../api";
+import { api, ChartSpec, DashboardShell, DashboardWidget } from "../api";
 import { AgingStack, BusinessUnitBars, MonthlyTrend, SeverityDonut } from "./Charts";
 import ChartEditor from "./ChartEditor";
 import DrilldownChart from "./DrilldownChart";
+import Modal from "./Modal";
 
 /**
  * Shared empty array for widgets with no data yet. `?? []` built a NEW array on every
@@ -45,6 +46,10 @@ export default forwardRef<DashboardViewHandle, { dashboardKey: string; canEdit?:
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<null | { widgetId: number; title: string; spec: ChartSpec }>(null);
   const [adding, setAdding] = useState(false);
+  // Which widget (if any) is showing in the big Expand modal — a dashboard panel is
+  // only ~300px tall, which is fine for a glance but too small to read a chart with
+  // many bars/categories or a table with more than a handful of rows.
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   useImperativeHandle(ref, () => ({ openAddChart: () => setAdding(true) }), []);
 
   const load = useCallback(() => {
@@ -99,6 +104,22 @@ export default forwardRef<DashboardViewHandle, { dashboardKey: string; canEdit?:
   const isKpi = (w: (typeof widgets)[number]) => w.data_source === "query_builder" && w.widget_type === "number";
   const kpiWidgets = widgets.filter(isKpi);
   const gridWidgets = widgets.filter((w) => w.widget_type !== "kpi" && !isKpi(w));
+  const expandedWidget = expandedId != null ? gridWidgets.find((w) => w.id === expandedId) ?? null : null;
+
+  // Shared between the normal dashboard-panel-sized render and the big Expand modal,
+  // so the two never drift out of sync (same chart, same drill state gets lost either
+  // way since these components don't persist their own state across an unmount).
+  const renderWidgetBody = (w: DashboardWidget, expanded = false) => {
+    if (pending.has(w.id)) return <div className="loading">loading chart…</div>;
+    const isBuilt = w.data_source === "query_builder";
+    if (isBuilt && w.widget_type === "table") return <RecordsChart widget={w} rows={data[w.key] ?? NO_ROWS} />;
+    if (isBuilt) {
+      return (
+        <DrilldownChart dashboardKey={dashboardKey} widget={w} baseRows={data[w.key] ?? NO_ROWS} expanded={expanded} />
+      );
+    }
+    return <LegacyChart type={w.widget_type} rows={data[w.key] ?? NO_ROWS} />;
+  };
 
   return (
     <>
@@ -134,22 +155,17 @@ export default forwardRef<DashboardViewHandle, { dashboardKey: string; canEdit?:
                     <h2>{w.title}</h2>
                     {spec.caption && <div className="panel-caption">{spec.caption.split(" · drill:")[0]}</div>}
                   </div>
-                  {canEdit && isBuilt && (
-                    <div className="panel-actions">
-                      <button onClick={() => setEditing({ widgetId: w.id, title: w.title, spec })}>Edit</button>
-                      <button onClick={() => removeChart(w.id)}>✕</button>
-                    </div>
-                  )}
+                  <div className="panel-actions">
+                    <button onClick={() => setExpandedId(w.id)} title="Expand">⤢</button>
+                    {canEdit && isBuilt && (
+                      <>
+                        <button onClick={() => setEditing({ widgetId: w.id, title: w.title, spec })}>Edit</button>
+                        <button onClick={() => removeChart(w.id)}>✕</button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                {pending.has(w.id) ? (
-                  <div className="loading">loading chart…</div>
-                ) : isBuilt && w.widget_type === "table" ? (
-                  <RecordsChart widget={w} rows={data[w.key] ?? NO_ROWS} />
-                ) : isBuilt ? (
-                  <DrilldownChart dashboardKey={dashboardKey} widget={w} baseRows={data[w.key] ?? NO_ROWS} />
-                ) : (
-                  <LegacyChart type={w.widget_type} rows={data[w.key] ?? NO_ROWS} />
-                )}
+                {renderWidgetBody(w)}
               </section>
             );
           })}
@@ -160,6 +176,25 @@ export default forwardRef<DashboardViewHandle, { dashboardKey: string; canEdit?:
         <div className="loading">
           This dashboard has no charts yet.{canEdit ? " Click “+ Add chart” to build one." : ""}
         </div>
+      )}
+
+      {expandedWidget && (
+        <Modal
+          title={expandedWidget.title}
+          onClose={() => setExpandedId(null)}
+          wide
+          className="chart-modal"
+        >
+          {(() => {
+            const spec = (expandedWidget.config ?? {}) as ChartSpec;
+            return (
+              <div className="chart-expand">
+                {spec.caption && <div className="panel-caption">{spec.caption.split(" · drill:")[0]}</div>}
+                {renderWidgetBody(expandedWidget, true)}
+              </div>
+            );
+          })()}
+        </Modal>
       )}
     </>
   );
