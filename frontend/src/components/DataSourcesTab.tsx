@@ -347,26 +347,33 @@ export default function DataSourcesTab() {
                 <td className="muted">{d.field_count}</td>
                 <td className="muted"><code>{d.key_column}</code>{d.watermark_column ? <> · <code>{d.watermark_column}</code></> : null}</td>
                 <td>
+                  {/* Icon-only: this row repeats per dataset, so every character here is
+                      multiplied by row count — a text label costs real width N times over,
+                      unlike the page-level "+ Add dataset" button above (paid once). title=
+                      keeps the action discoverable on hover instead of losing meaning. */}
                   <div className="panel-actions">
                     {d.source_table && (
                       liveRunning.has(d.key) ? (
-                        <button onClick={() => stopSync(d)} disabled={syncingKey === d.key} className="danger-outline">
-                          {syncingKey === d.key ? "Stopping…" : "Stop sync"}
+                        <button onClick={() => stopSync(d)} disabled={syncingKey === d.key} className="danger-outline"
+                                title={syncingKey === d.key ? "Stopping…" : "Stop sync"}>
+                          {syncingKey === d.key ? "…" : "⏹"}
                         </button>
                       ) : (
                         <>
-                          <button onClick={() => runSync(d)} disabled={syncingKey === d.key}>
-                            {syncingKey === d.key ? "Starting…" : "Run full sync"}
+                          <button onClick={() => runSync(d)} disabled={syncingKey === d.key}
+                                  title={syncingKey === d.key ? "Starting…" : "Run full sync"}>
+                            {syncingKey === d.key ? "…" : "↻"}
                           </button>
                           <button onClick={() => runTruncateSync(d)} disabled={syncingKey === d.key}
-                                  className="danger-outline" title="Replace the whole table with a fresh pull — deletions at the source are reflected here too">
-                            {syncingKey === d.key ? "Starting…" : "Truncate & Sync"}
+                                  className="danger-outline"
+                                  title={syncingKey === d.key ? "Starting…" : "Truncate & Sync — replace the whole table with a fresh pull; deletions at the source are reflected here too"}>
+                            {syncingKey === d.key ? "…" : "↺"}
                           </button>
                         </>
                       )
                     )}
-                    <button onClick={() => openEdit(d)}>Edit</button>
-                    <button onClick={() => remove(d)}>✕</button>
+                    <button onClick={() => openEdit(d)} title="Edit">✎</button>
+                    <button onClick={() => remove(d)} title="Delete dataset">✕</button>
                   </div>
                 </td>
               </tr>

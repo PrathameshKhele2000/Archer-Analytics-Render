@@ -406,10 +406,15 @@ button.danger-outline:hover { background: #fdecea; color: #b42318; border-color:
 
 /* ---- Panel header with per-chart actions ---- */
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding-right: 12px; }
-.panel-actions { display: flex; gap: 4px; }
+/* flex-wrap so a row with several action buttons (Data Sources' Run full sync /
+   Truncate & Sync / Edit / ✕ is the worst case) drops extras onto a second line
+   instead of silently overflowing past the table cell with no scrollbar to reveal
+   them — a plain non-wrapping flex row just clips/spills invisibly when the cell
+   doesn't have room for every button on one line. */
+.panel-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
 .panel-actions button {
   font-family: var(--font-sans); font-size: 11px; border: 1px solid var(--hairline); background: var(--surface);
-  color: var(--muted); padding: 3px 8px; border-radius: 3px; cursor: pointer;
+  color: var(--muted); padding: 3px 8px; border-radius: 3px; cursor: pointer; white-space: nowrap;
 }
 .panel-actions button:hover { color: var(--accent); border-color: var(--accent); }
 

@@ -257,24 +257,40 @@ export class DatasetSyncService {
     const writeTarget = reload ?? ds.target_table;
     if (reload) {
       await this.db.query(`DROP TABLE IF EXISTS ${reload}`);
-      // INCLUDING INDEXES carries over the primary key (record_id) as a real unique
-      // constraint on the reload table, not just DEFAULTS — without it, flushChunk's
-      // "ON CONFLICT (record_id)" merge below has nothing to conflict against and
-      // fails outright on the very first chunk.
-      await this.db.query(`CREATE TABLE ${reload} (LIKE ${ds.target_table} INCLUDING DEFAULTS INCLUDING INDEXES)`);
+      // Only the primary key comes along here, not every index. record_id PRIMARY
+      // KEY is required immediately — flushChunk's "ON CONFLICT (record_id)" merge
+      // below has nothing to conflict against without it. Every OTHER index (one per
+      // dimension/date field) is skipped here on purpose: maintaining a whole set of
+      // indexes across a row-by-row bulk load is usually the single largest cost in
+      // the entire pull. They get rebuilt in bulk, once, on the REAL table as part
+      // of the swap below (not here — an index built on this table would just be
+      // thrown away with it, since target_table's own indexes are what the swap's
+      // own INSERT actually has to pay for otherwise).
+      await this.db.query(`CREATE TABLE ${reload} (LIKE ${ds.target_table} INCLUDING DEFAULTS)`);
+      await this.db.query(`ALTER TABLE ${reload} ADD PRIMARY KEY (record_id)`);
     }
 
     let total = 0; // rows read from the source so far (progress display + return value)
     let committed = 0; // rows actually committed so far (into writeTarget, not necessarily the real table yet)
     let maxWatermark: Date | null = since;
-    let buffer: string[] = [];
+    // Keyed by recordId (as a string, so a numeric key and its bigint-hash counterpart
+    // can never collide) rather than a plain array — this is what makes a duplicate key
+    // WITHIN one chunk harmless: two rows for the same source id just overwrite each
+    // other's buffer entry (last one wins), so the COPY this chunk sends to Postgres
+    // never contains two rows for the same conflict target in the first place. Without
+    // this, ON CONFLICT DO UPDATE on a batch that legitimately contains a repeated key
+    // (versioned/history rows sharing an id, a source view that isn't perfectly
+    // deduplicated, etc.) throws "ON CONFLICT DO UPDATE command cannot affect row a
+    // second time" and aborts the entire sync — the same class of bug already fixed for
+    // CSV import (see importRows()'s own by-id dedup in datasets.service.ts).
+    let buffer = new Map<string, string>();
     let lastLog = Date.now();
 
     /** COPY one chunk's CSV lines into a fresh staging table, merge into writeTarget
      *  (the real table normally, or the reload table for Truncate & Sync), commit —
      *  small self-contained transaction, not the whole pull. */
-    const flushChunk = async (lines: string[]): Promise<void> => {
-      if (!lines.length) return;
+    const flushChunk = async (lines: Map<string, string>): Promise<void> => {
+      if (!lines.size) return;
       const client = await this.db.connect();
       try {
         await client.query("BEGIN");
@@ -290,20 +306,20 @@ export class DatasetSyncService {
           const copyStream = client.query(copyFrom(`COPY ${staging} (${allCols.join(",")}) FROM STDIN WITH (FORMAT csv)`));
           copyStream.on("error", reject);
           copyStream.on("finish", () => resolve());
-          copyStream.end(lines.join(""));
+          copyStream.end([...lines.values()].join(""));
         });
         // ON CONFLICT here isn't about incremental upserts when writeTarget is the
         // reload table (it starts empty) — it's a safety net against the source
-        // handing back the same key twice across two different chunks, which would
-        // otherwise violate the primary key and abort a reload that was otherwise
-        // completely fine.
+        // handing back the same key twice across two DIFFERENT chunks (each its own
+        // statement, which Postgres allows fine), not within one — that case is
+        // already ruled out by the Map dedup above.
         await client.query(
           `INSERT INTO ${writeTarget} (${allCols.join(", ")})
            SELECT ${allCols.join(", ")} FROM ${staging}
            ON CONFLICT (record_id) DO UPDATE SET ${updates}, synced_at = now()`,
         );
         await client.query("COMMIT");
-        committed += lines.length;
+        committed += lines.size;
       } catch (e) {
         await client.query("ROLLBACK").catch(() => undefined);
         throw e;
@@ -336,7 +352,7 @@ export class DatasetSyncService {
             if (d && (!maxWatermark || d > maxWatermark)) maxWatermark = d;
           }
           const vals = [recordId, ...mappings.map((m) => this.convert(row[m.archer_field_name], m.transform))];
-          buffer.push(vals.map(csvField).join(",") + "\n");
+          buffer.set(String(recordId), vals.map(csvField).join(",") + "\n");
 
           // Proof-of-life: with no other progress signal, a genuinely working sync
           // and a silently stuck one look identical from the outside. A line every
@@ -346,10 +362,10 @@ export class DatasetSyncService {
             lastLog = Date.now();
           }
 
-          if (buffer.length >= CHUNK_ROWS) {
+          if (buffer.size >= CHUNK_ROWS) {
             request.pause(); // no more rows arrive until this chunk finishes committing
             const chunk = buffer;
-            buffer = [];
+            buffer = new Map();
             pendingFlush = flushChunk(chunk)
               .then(() => { request.resume(); })
               .catch(fail);
@@ -360,7 +376,7 @@ export class DatasetSyncService {
           .then(async () => {
             await pendingFlush; // let any in-flight chunk finish first
             await flushChunk(buffer); // the final, partial chunk
-            buffer = [];
+            buffer = new Map();
             resolve();
           })
           .catch(fail);
@@ -385,12 +401,24 @@ export class DatasetSyncService {
           );
         }
         this.log.log(`sync ${ds.key}: pull complete, swapping in ${total.toLocaleString()} fresh rows…`);
+        // Captured from target_table BEFORE it's touched, so these are the exact
+        // definitions to restore afterward — not the reload table's (which has none
+        // yet, on purpose). Dropping them before the bulk INSERT and rebuilding them
+        // in one shot afterward is the actual point of Truncate & Sync's speed: index
+        // maintenance done incrementally, one row at a time, across every dimension/
+        // date index is usually the single largest cost in a bulk load; the same
+        // indexes built once, after all the data is already in place, are a plain
+        // sorted scan instead. All in one transaction — target_table never becomes
+        // visible to readers half-swapped or missing its indexes.
+        const indexes = await this.secondaryIndexes(ds.target_table);
         const client = await this.db.connect();
         try {
           await client.query("BEGIN");
           await client.query("SET LOCAL lock_timeout = '60s'");
+          for (const { indexname } of indexes) await client.query(`DROP INDEX IF EXISTS ${indexname}`);
           await client.query(`TRUNCATE ${ds.target_table}`);
           await client.query(`INSERT INTO ${ds.target_table} SELECT * FROM ${reload}`);
+          for (const { indexdef } of indexes) await client.query(indexdef);
           await client.query("COMMIT");
         } catch (e) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -415,6 +443,25 @@ export class DatasetSyncService {
 
     if (maxWatermark) await this.setState(ds.key, { last_watermark: maxWatermark });
     return total;
+  }
+
+  /**
+   * `table`'s own secondary (non-PK) index names + full CREATE INDEX definitions,
+   * read straight from Postgres's catalog — not dataset field metadata, so this
+   * stays correct even if an index was ever added by hand. Used by Truncate & Sync
+   * to drop these before its bulk reload and replay the exact same `indexdef`
+   * strings to rebuild them afterward (see the swap step in copy()).
+   */
+  private async secondaryIndexes(table: string): Promise<{ indexname: string; indexdef: string }[]> {
+    const { rows } = await this.db.query<{ indexname: string; indexdef: string }>(
+      `SELECT ix.relname AS indexname, pg_get_indexdef(i.indexrelid) AS indexdef
+         FROM pg_index i
+         JOIN pg_class ix ON ix.oid = i.indexrelid
+         JOIN pg_class t ON t.oid = i.indrelid
+        WHERE t.relname = $1 AND NOT i.indisprimary`,
+      [table],
+    );
+    return rows;
   }
 
   private async enabledMappings(key: string): Promise<MappingRow[]> {

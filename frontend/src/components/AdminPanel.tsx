@@ -122,11 +122,17 @@ function UsersTab({ currentUserId }: { currentUserId: number }) {
               <td>{u.roles.join(", ")}</td>
               <td>{u.is_active ? "Yes" : "No"}</td>
               <td className="num">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "—"}</td>
+              {/* Icon-only: this row repeats per user, so a text label's width is paid
+                  once per row — unlike the page-level Export/Import/Create buttons above,
+                  which only ever appear once. title= keeps each action discoverable on hover. */}
               <td className="row-actions">
-                <button onClick={() => openEdit(u)}>Edit</button>
-                <button onClick={() => toggleActive(u)}>{u.is_active ? "Deactivate" : "Activate"}</button>
+                <button onClick={() => openEdit(u)} title="Edit">✎</button>
+                <button onClick={() => toggleActive(u)} title={u.is_active ? "Deactivate" : "Activate"}
+                        className={u.is_active ? "danger-outline" : undefined}>
+                  ⏻
+                </button>
                 {u.id !== currentUserId && (
-                  <button className="danger" onClick={() => removeUser(u)}>Delete</button>
+                  <button className="danger" onClick={() => removeUser(u)} title="Delete user">✕</button>
                 )}
               </td>
             </tr>

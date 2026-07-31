@@ -353,7 +353,19 @@
       "Bash(node -e *)",
       "Bash(psql -U postgres -lqt)",
       "Bash(pg_isready)",
-      "Bash(lsof -iTCP -sTCP:LISTEN -P)"
+      "Bash(lsof -iTCP -sTCP:LISTEN -P)",
+      "Bash(export DBURL='postgresql://postgres:Khele%402000@localhost:5433/postgres')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'select version\\(\\);')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -v ON_ERROR_STOP=1)",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -v ON_ERROR_STOP=1 -c ' *)",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT count\\(*\\) FROM ix_test_target;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT indexname FROM pg_indexes WHERE tablename = '\\\\''ix_test_target'\\\\'' ORDER BY indexname;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'EXPLAIN SELECT * FROM ix_test_target WHERE severity = '\\\\''Critical'\\\\'';')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT severity, count\\(*\\) FROM ix_test_target GROUP BY severity ORDER BY severity;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP TABLE IF EXISTS ix_test_target, ix_test_reload;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c ' *)",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT * FROM ix_dupe_test;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP TABLE IF EXISTS ix_dupe_test;')"
     ]
   }
 }
