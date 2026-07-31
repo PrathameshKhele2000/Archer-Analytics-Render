@@ -418,6 +418,10 @@ button.danger-outline:hover { background: #fdecea; color: #b42318; border-color:
 .chart-number span { font-family: var(--font-mono); font-size: 52px; font-weight: 500; color: var(--ink); }
 .chart-table { overflow: auto; padding: 8px 12px; }
 .chart-table table { font-size: 12px; }
+/* A chart's Table view shows the same groups the chart itself would — clicking a
+   row drills in exactly like clicking the matching bar/slice does. */
+.chart-table tr.clickable-row { cursor: pointer; }
+.chart-table tr.clickable-row:hover td { background: var(--accent-soft); }
 
 /* ---- Archer-style chart editor ---- */
 .chart-editor {

@@ -4,26 +4,27 @@ import { buildCsv, downloadText } from "../csv";
 import { formatCell } from "../recordColumns";
 import ExportMenu from "./ExportMenu";
 import GenericChart, { legendNames, paletteOf, SeriesLegend } from "./GenericChart";
+import VirtualTable, { VCol } from "./VirtualTable";
 
 const humanize = (k?: string | null) => (k ? k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : "");
 
 /** Records table shown at the deepest drill level (the raw findings behind a section).
- *  Columns are derived from the returned rows so it adapts to whatever fields come back. */
+ *  Columns are derived from the returned rows so it adapts to whatever fields come back.
+ *  Virtualized (not a plain <table>) — the leaf level now fetches the same full,
+ *  un-capped result set the export uses, which can be thousands of rows; rendering
+ *  every one as a real DOM row would make the browser crawl, so only the rows
+ *  actually in the viewport get mounted, same as DataSets/Views tables already do. */
 function RecordsTable({ rows }: { rows: Finding[] }) {
   if (!rows.length) return <div className="loading">No records for this selection.</div>;
   const keys = Object.keys(rows[0]);
+  const columns: VCol[] = keys.map((k) => ({ key: k, label: humanize(k), width: 180 }));
   return (
     <div className="records-table">
-      <table className="findings">
-        <thead>
-          <tr>{keys.map((k) => <th key={k}>{humanize(k)}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>{keys.map((k) => <td key={k}>{formatCell(r[k])}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
+      <VirtualTable
+        columns={columns}
+        rows={rows}
+        renderCell={(key, row) => formatCell(row[key])}
+      />
     </div>
   );
 }
@@ -52,7 +53,7 @@ export default function DrilldownChart({
   const [drillEnabled, setDrillEnabled] = useState(false);
   const [steps, setSteps] = useState<DrillStep[]>([]);
   const [rows, setRows] = useState<QueryRow[]>(baseRows);
-  const [records, setRecords] = useState<{ steps: DrillStep[]; rows: Finding[] } | null>(null);
+  const [records, setRecords] = useState<{ steps: DrillStep[]; rows: Finding[]; truncated: boolean } | null>(null);
   const [tableView, setTableView] = useState(false);
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -94,8 +95,8 @@ export default function DrilldownChart({
   };
 
   // At the leaf drill level the screen shows RAW RECORDS, not the aggregated `rows` —
-  // exporting must fetch the full matching set (the on-screen table is a fast sample,
-  // capped for display speed) rather than re-exporting the chart's aggregate data.
+  // exporting re-fetches the same full matching set the on-screen table already
+  // shows (both use full=true now) rather than re-exporting the chart's aggregate data.
   const exportRecordsData = async () => {
     const res = await api.dashboards.records(dashboardKey, widget.id, records!.steps, true);
     if (!res.rows.length) return { headers: [], out: [] as (string | number | null)[][], truncated: false };
@@ -143,11 +144,14 @@ export default function DrilldownChart({
         setSteps(next);
         setRows(res.rows);
       } else {
-        // Deepest level → show the underlying records for the full path.
+        // Deepest level → show the underlying records for the full path. Fetches
+        // the same uncapped (up to MAX_EXPORT_RECORDS) result set export already
+        // used — previously this used the default 200-row preview cap, so what you
+        // saw on screen was a small sample of what export actually gave you.
         const leafDim = sequence[steps.length];
-        const full = [...steps, { dimension: leafDim, value }];
-        const res = await api.dashboards.records(dashboardKey, widget.id, full);
-        setRecords({ steps: full, rows: res.rows });
+        const path = [...steps, { dimension: leafDim, value }];
+        const res = await api.dashboards.records(dashboardKey, widget.id, path, true);
+        setRecords({ steps: path, rows: res.rows, truncated: res.truncated });
       }
     } catch (e) {
       console.error(e);
@@ -225,7 +229,14 @@ export default function DrilldownChart({
       </div>
 
       {records ? (
-        <RecordsTable rows={records.rows} />
+        <>
+          {records.truncated && (
+            <p className="muted small">
+              This selection has more than {records.rows.length.toLocaleString()} records — showing the first {records.rows.length.toLocaleString()}. Export for the complete set.
+            </p>
+          )}
+          <RecordsTable rows={records.rows} />
+        </>
       ) : tableView ? (
         <GenericChart type="table" rows={rows} />
       ) : (
@@ -238,6 +249,13 @@ export default function DrilldownChart({
           onToggleHidden={toggleSeries}
           clauseLevels={spec.mode === "clause" ? (spec.groupBy ?? []).map(humanize) : undefined}
           onSliceClick={drillEnabled ? onSectionClick : undefined}
+          // The field actually being shown right now, not a generic "Group"/"Category"
+          // label — sequence[steps.length] is exactly that field for both modes
+          // (clause mode's "levels" and a normal dimension+drilldown path are both
+          // just an ordered list of fields to descend through). Updates on its own
+          // as steps grows with each drill click, since this re-renders every click.
+          categoryLabel={humanize(sequence[steps.length]) || "Category"}
+          valueLabel={humanize(spec.measure) || "Value"}
         />
       )}
     </div>

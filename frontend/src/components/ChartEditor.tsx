@@ -56,6 +56,7 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   const [limit, setLimit] = useState<string>(existing?.spec.limit ? String(existing.spec.limit) : "50");
   const [drilldown, setDrilldown] = useState<string[]>(existing?.spec.drilldown ?? []);
   const [tableColumns, setTableColumns] = useState<string[] | null>(existing?.spec.tableColumns ?? null);
+  const [tableColDragIdx, setTableColDragIdx] = useState<number | null>(null);
   /** Split the dataset's measures into "fn + field" pairs plus any custom measures. */
   const aggCatalog = useMemo(() => {
     const byFn: Record<string, { key: string; label: string }[]> = { sum: [], avg: [], min: [], max: [] };
@@ -192,10 +193,10 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
   const isTable = chartType === "table";
   // Pie/donut/table/number previews are compact (a small slice legend, a records list,
   // a single figure) and read fine with Save/Cancel in the form column where they've
-  // always been. A bar/column/line/area preview is a full chart the admin is actively
-  // tuning, so Save/Cancel move directly under IT instead — confirming "this chart",
-  // not something buried back in the form.
-  const actionsBelowPreview = !["pie", "donut", "table", "number"].includes(chartType);
+  // always been. A bar/column/line/area/table preview is a full-size container the
+  // admin is actively tuning, so Save/Cancel move directly under IT instead —
+  // confirming "this chart", not something buried back in the form.
+  const actionsBelowPreview = !["pie", "donut", "number"].includes(chartType);
   // Whether this chart has a colour key at all, i.e. whether "Show legend" does anything.
   // Pie/donut colour by slice; Compare and a split-by Group By colour by series.
   // Grouping (clause) shows one level at a time, so it is single-series like a plain bar.
@@ -538,6 +539,35 @@ export default function ChartEditor({ dashboardKey, existing, onSaved, onCancel,
                     selected={colShown}
                     onToggle={toggleTableCol}
                   />
+                  {(() => {
+                    const order = tableColumns ?? defaultRecordCols;
+                    if (order.length < 2) return null;
+                    return (
+                      <ul className="col-order-list">
+                        {order.map((key, i) => {
+                          const label = recordCols.find((c) => c.key === key)?.label ?? key;
+                          return (
+                            <li key={key} className={`col-order-item${tableColDragIdx === i ? " dragging" : ""}`}
+                                draggable
+                                onDragStart={() => setTableColDragIdx(i)}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => {
+                                  if (tableColDragIdx === null || tableColDragIdx === i) return;
+                                  const cols = [...order];
+                                  const [moved] = cols.splice(tableColDragIdx, 1);
+                                  cols.splice(i, 0, moved);
+                                  setTableColumns(cols);
+                                  setTableColDragIdx(null);
+                                }}
+                                onDragEnd={() => setTableColDragIdx(null)}>
+                              <span className="drag-handle" title="Drag to reorder">⠿</span>
+                              <span className="col-order-label">{label}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    );
+                  })()}
                 </div>
               )}
             </>

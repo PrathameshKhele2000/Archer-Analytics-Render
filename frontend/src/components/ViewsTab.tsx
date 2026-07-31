@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, FieldsCatalog, FilterCondition, RecordView, Role } from "../api";
+import { formatCell } from "../recordColumns";
 import FilterConditions from "./FilterConditions";
 import Modal from "./Modal";
 import MultiCheckDropdown from "./MultiCheckDropdown";
@@ -35,6 +36,8 @@ export default function ViewsTab() {
   const [draftTab, setDraftTab] = useState<"columns" | "rows" | "condition">("columns");
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [matches, setMatches] = useState<{ total: number; capped: boolean } | null>(null);
+  const [preview, setPreview] = useState<Record<string, any>[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -58,17 +61,28 @@ export default function ViewsTab() {
     }).catch((e) => setErr(String(e.message ?? e)));
   }, [draft?.datasetKey]);
 
-  // Live "this view matches N records" while the admin builds the rule (per dataset).
+  // Live "this view matches N records" + a sample preview while the admin builds the
+  // rule (per dataset). Columns are included so switching which fields are shown
+  // refreshes the preview to match, not just changes to the condition itself.
   const scopeKey = useMemo(
-    () => (draft ? JSON.stringify({ d: draft.datasetKey, c: draft.conditions, l: draft.logic }) : ""),
-    [draft?.datasetKey, draft?.conditions, draft?.logic],
+    () => (draft ? JSON.stringify({ d: draft.datasetKey, c: draft.conditions, l: draft.logic, cols: draft.columns }) : ""),
+    [draft?.datasetKey, draft?.conditions, draft?.logic, draft?.columns],
   );
   useEffect(() => {
     if (!draft) return;
     setMatches(null);
+    setPreview(null);
+    setPreviewLoading(true);
     const t = setTimeout(() => {
-      api.admin.views.matchCount(draft.datasetKey, draft.conditions, draft.logic.trim() || undefined)
+      const logic = draft.logic.trim() || undefined;
+      api.admin.views.matchCount(draft.datasetKey, draft.conditions, logic)
         .then(setMatches).catch(() => setMatches(null));
+      // Same columns the view will actually be saved with, so what's shown here is
+      // what the view will really look like — not a generic "every field" preview.
+      api.admin.views.previewMatches(draft.datasetKey, draft.conditions, logic, draft.columns)
+        .then((r) => setPreview(r.rows))
+        .catch(() => setPreview(null))
+        .finally(() => setPreviewLoading(false));
     }, 400);
     return () => clearTimeout(t);
   }, [scopeKey]);
@@ -132,8 +146,14 @@ export default function ViewsTab() {
   };
 
   const remove = async (v: RecordView) => {
-    if (!confirm(`Delete the view "${v.name}"? The records themselves are not affected.`)) return;
-    try { await api.admin.views.remove(v.id); await load(); }
+    if (!confirm(`Delete the view "${v.name}"? The records themselves are not affected, but any charts built on this view will be deleted too.`)) return;
+    try {
+      const res = await api.admin.views.remove(v.id);
+      await load();
+      if (res.deletedCharts) {
+        alert(`"${v.name}" deleted — also deleted ${res.deletedCharts} chart${res.deletedCharts === 1 ? "" : "s"} that were built on it.`);
+      }
+    }
     catch (e: any) { setErr(e.message ?? "Delete failed"); }
   };
 
@@ -323,6 +343,28 @@ export default function ViewsTab() {
                   ? <FilterConditions conditions={draft.conditions} logic={draft.logic} catalog={schema}
                                       onChange={(c, l) => setDraft({ ...draft, conditions: c, logic: l })} />
                   : <div className="loading">loading {datasetName(draft.datasetKey)} fields…</div>}
+
+                <div className="field-label" style={{ marginTop: 16 }}>
+                  Preview — first {preview?.length ?? 50} matching records
+                </div>
+                {previewLoading && <div className="loading">loading preview…</div>}
+                {!previewLoading && preview && preview.length === 0 && (
+                  <p className="muted small">No records match this condition yet.</p>
+                )}
+                {!previewLoading && preview && preview.length > 0 && (
+                  <div className="records-table" style={{ maxHeight: 320, overflow: "auto" }}>
+                    <table className="findings">
+                      <thead>
+                        <tr>{Object.keys(preview[0]).map((k) => <th key={k}>{labelOf(k)}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {preview.map((r, i) => (
+                          <tr key={i}>{Object.keys(preview[0]).map((k) => <td key={k}>{formatCell(r[k])}</td>)}</tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>
             )}
 

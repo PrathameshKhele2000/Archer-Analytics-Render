@@ -5,6 +5,16 @@ import { QueryRow } from "../api";
 const FONT = { fontFamily: "'IBM Plex Sans', sans-serif", color: "#68707c", fontSize: 11 };
 // Top padding is small now that the legend lives in a corner dropdown, not above the plot.
 const GRID = { left: 56, right: 20, top: 24, bottom: 40, containLabel: true };
+// How much horizontal room a vertical (column/line/area) chart guarantees each
+// category — see scrollWidth() below, which widens the canvas to exactly
+// categories * PX_PER_CATEGORY so dense charts don't compress into an unreadable
+// smear. Category axis label truncation reuses this SAME number (not a made-up
+// constant) so a label can never be wider than the space its own bar actually has,
+// which is what "every label shows, truncated, but nothing overlaps" requires —
+// truncating to a fixed width chosen without reference to actual bar spacing just
+// moves the overlap from "some labels missing" to "some labels colliding".
+const PX_PER_CATEGORY = 34;
+const MAX_CANVAS_PX = 24_000;
 /**
  * Chart colour themes. `default` is the original house palette; the rest are ordered
  * so adjacent series stay distinguishable (and readable for the common forms of
@@ -84,6 +94,30 @@ function uniq(values: (string | undefined)[]): string[] {
 const colorAt = (idx: number, palette: string[] = PALETTE) => palette[idx % palette.length];
 
 /**
+ * On-chart value label: exact under 1000 ("847"), otherwise abbreviated to the
+ * largest unit that fits (k/M/B) at one decimal place — "1k", "2.5M". A "~" prefix
+ * marks when that's a genuine approximation (1258 -> "~1.3k", since 1.3k rounds
+ * away real precision) versus a value the abbreviation represents exactly (1500 ->
+ * "1.5k", 2000000 -> "2M" — no information was dropped rounding to one decimal).
+ */
+function formatCompact(n: number): string {
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs < 1000) return `${sign}${abs}`;
+  const units: { value: number; suffix: string }[] = [
+    { value: 1e9, suffix: "B" },
+    { value: 1e6, suffix: "M" },
+    { value: 1e3, suffix: "k" },
+  ];
+  const unit = units.find((u) => abs >= u.value)!;
+  const scaled = abs / unit.value;
+  const rounded = Math.round(scaled * 10) / 10;
+  const label = `${rounded % 1 === 0 ? rounded : rounded.toFixed(1)}${unit.suffix}`;
+  const exact = abs === rounded * unit.value;
+  return `${exact ? "" : "~"}${sign}${label}`;
+}
+
+/**
  * The names a chart's legend lists (empty = the chart has no colour key to show).
  * A legend is a key from COLOUR to meaning, so it only exists where colour carries
  * information: one entry per slice (pie/donut) or per series (a split-by chart). A
@@ -108,9 +142,11 @@ function legendOption(names: string[], hidden: Set<string>): echarts.EChartsOpti
   };
 }
 
+const AXIS_NAME_STYLE = { ...FONT, fontWeight: 600 as const };
+
 function buildCartesian(
   rows: QueryRow[], type: "bar" | "line", horizontal: boolean, area: boolean, hidden: Set<string>,
-  palette: string[], showLegend: boolean,
+  palette: string[], showLegend: boolean, catLabel?: string, valLabel?: string,
 ): echarts.EChartsOption {
   const hasSeries = rows.some((r) => r.series != null);
   const seriesNames = hasSeries ? uniq(rows.map((r) => r.series)) : ["value"];
@@ -121,6 +157,7 @@ function buildCartesian(
   const allCats = uniq(rows.map((r) => r.x));
   const cats = singleBar ? allCats.filter((c) => !hidden.has(c)) : allCats;
 
+  const stacked = hasSeries && type === "bar";
   const built = seriesNames.map((name, idx) => {
     const data = cats.map((c) => {
       const match = rows.find((r) => (r.x ?? "—") === c && (hasSeries ? (r.series ?? "—") === name : true));
@@ -129,7 +166,7 @@ function buildCartesian(
     return {
       name,
       type,
-      stack: hasSeries && type === "bar" ? "total" : undefined,
+      stack: stacked ? "total" : undefined,
       areaStyle: area ? { opacity: 0.25 } : undefined,
       smooth: type === "line",
       symbol: type === "line" ? "circle" : undefined,
@@ -141,13 +178,46 @@ function buildCartesian(
       itemStyle: singleBar
         ? { color: (p: any) => colorAt(allCats.indexOf(String(p.name)), palette) }
         : { color: colorAt(idx, palette) },
+      // Exact under 1000, abbreviated with a unit above it ("1.3k") otherwise — a
+      // stacked segment gets its label centered INSIDE the segment (there's no
+      // "above the bar" for a middle segment of a stack); a normal bar/line point
+      // gets it just outside, in the direction the bar/line actually extends.
+      label: {
+        show: true, fontSize: 10, color: stacked ? "#fff" : "#68707c",
+        position: stacked ? "inside" : horizontal ? "right" : "top",
+        formatter: (p: any) => formatCompact(Number(p.value)),
+      },
       data,
     };
   });
   const series = built.filter((s) => singleBar || !hidden.has(String(s.name)));
 
-  const catAxis = { type: "category" as const, data: cats, axisLabel: FONT };
-  const valAxis = { type: "value" as const, axisLabel: FONT, splitLine: { lineStyle: { color: "#eef0ed" } } };
+  // Vertical charts (column/line/area) widen their canvas to guarantee EXACTLY
+  // PX_PER_CATEGORY per category (scrollWidth(), used as this chart's minWidth in
+  // GenericChart below) — so a label can safely use up to that width and is
+  // GUARANTEED not to collide with its neighbor, no matter how many categories
+  // there are. A fixed width picked without reference to that spacing (the earlier
+  // version of this) either overlaps once there are enough bars, or wastes space
+  // when there are few. Horizontal bars don't have this squeeze at all (each
+  // category is its own row, stacked vertically, not fighting neighbors for
+  // horizontal room), so they get a generous, constant width instead.
+  const catLabelWidth = horizontal || cats.length < 2 ? 140 : PX_PER_CATEGORY - 6;
+  const catAxis = {
+    type: "category" as const, data: cats,
+    // Long category names ("Cross-Site Scripting (Reflected) in Login Form") would
+    // otherwise overlap or run past the plot — truncated to "Abc…" under its own
+    // bar/tick instead, with the full name still available on hover via tooltip.
+    // interval:0 is the important part here, not just the truncation width — without
+    // it ECharts' default "auto" interval HIDES whichever labels it predicts would
+    // overlap rather than truncating them, which is why some bars had no label under
+    // them at all instead of every bar getting a consistently shortened one.
+    axisLabel: { ...FONT, overflow: "truncate" as const, width: catLabelWidth, ellipsis: "…", interval: 0 },
+    name: catLabel, nameLocation: "middle" as const, nameGap: 32, nameTextStyle: AXIS_NAME_STYLE,
+  };
+  const valAxis = {
+    type: "value" as const, axisLabel: FONT, splitLine: { lineStyle: { color: "#eef0ed" } },
+    name: valLabel, nameLocation: "middle" as const, nameGap: 44, nameTextStyle: AXIS_NAME_STYLE,
+  };
   // ECharts keys a cartesian legend by SERIES name, so only a split-by chart has one.
   const legendVals = hasSeries ? seriesNames : [];
   const withLegend = showLegend && legendVals.length > 1;
@@ -182,7 +252,9 @@ function buildPie(
       radius: donut ? ["45%", "70%"] : "68%",
       // Shift the pie up a little when a legend occupies the bottom strip.
       center: ["50%", withLegend ? "44%" : "50%"],
-      label: { fontSize: 11 },
+      // Name on its own line, value under it — exact under 1000, abbreviated with a
+      // unit otherwise, same rule as bar/line labels.
+      label: { fontSize: 11, formatter: (p: any) => `${p.name}\n${formatCompact(Number(p.value))}` },
       data,
     }],
   };
@@ -197,9 +269,6 @@ function buildPie(
  * canvas — beyond that the bars do get thinner, which is the honest outcome for a
  * chart with thousands of categories.
  */
-const PX_PER_CATEGORY = 34;
-const MAX_CANVAS_PX = 24_000;
-
 function scrollWidth(categories: number): number | undefined {
   if (categories < 2) return undefined;
   return Math.min(MAX_CANVAS_PX, categories * PX_PER_CATEGORY);
@@ -251,11 +320,16 @@ export function SeriesLegend({
  * show/hide dropdown. Always calls hooks (Rules of Hooks).
  */
 function ChartWithLegend({
-  type, rows, showLegend, theme, onSliceClick, hidden: controlledHidden, onToggleHidden,
+  type, rows, showLegend, theme, onSliceClick, hidden: controlledHidden, onToggleHidden, categoryLabel, valueLabel,
 }: {
   type: string; rows: QueryRow[]; showLegend?: boolean; theme?: string | null;
   onSliceClick?: (name: string) => void; hidden?: Set<string>;
   onToggleHidden?: (name: string) => void;
+  // Named by MEANING (the dimension/measure), not screen position — buildCartesian
+  // itself decides whether the category axis ends up drawn as x or y (a horizontal
+  // bar chart swaps them), so naming these "x"/"y" here would silently mean the
+  // opposite of what the caller intended for that one chart type.
+  categoryLabel?: string; valueLabel?: string;
 }) {
   const [internalHidden, setInternalHidden] = useState<Set<string>>(new Set());
   // When a parent supplies `hidden` it owns the show/hide state (its dropdown lives
@@ -277,15 +351,15 @@ function ChartWithLegend({
   const option = useMemo<echarts.EChartsOption | null>(() => {
     if (!rows.length) return null;
     switch (type) {
-      case "bar": return buildCartesian(rows, "bar", true, false, hidden, palette, wantsLegend);
-      case "column": return buildCartesian(rows, "bar", false, false, hidden, palette, wantsLegend);
-      case "line": return buildCartesian(rows, "line", false, false, hidden, palette, wantsLegend);
-      case "area": return buildCartesian(rows, "line", false, true, hidden, palette, wantsLegend);
+      case "bar": return buildCartesian(rows, "bar", true, false, hidden, palette, wantsLegend, categoryLabel, valueLabel);
+      case "column": return buildCartesian(rows, "bar", false, false, hidden, palette, wantsLegend, categoryLabel, valueLabel);
+      case "line": return buildCartesian(rows, "line", false, false, hidden, palette, wantsLegend, categoryLabel, valueLabel);
+      case "area": return buildCartesian(rows, "line", false, true, hidden, palette, wantsLegend, categoryLabel, valueLabel);
       case "pie": return buildPie(rows, false, hidden, palette, wantsLegend);
       case "donut": return buildPie(rows, true, hidden, palette, wantsLegend);
       default: return null;
     }
-  }, [type, rows, hidden, palette, wantsLegend]);
+  }, [type, rows, hidden, palette, wantsLegend, categoryLabel, valueLabel]);
 
   // Only a category axis needs room per value; pie/donut have no axis to crowd.
   const cartesian = ["bar", "column", "line", "area"].includes(type);
@@ -331,9 +405,13 @@ interface GenericChartProps {
   onToggleHidden?: (name: string) => void;
   /** Column headers for Group & Count (clause) rows, one per grouping level. */
   clauseLevels?: string[];
+  /** Axis titles, named by meaning (the dimension/measure) not screen position —
+   *  see the note on ChartWithLegend's matching props for why. */
+  categoryLabel?: string;
+  valueLabel?: string;
 }
 
-export default function GenericChart({ type, rows: rawRows, showLegend, theme, onSliceClick, hidden, onToggleHidden, clauseLevels }: GenericChartProps) {
+export default function GenericChart({ type, rows: rawRows, showLegend, theme, onSliceClick, hidden, onToggleHidden, clauseLevels, categoryLabel, valueLabel }: GenericChartProps) {
   let rows = rawRows;
   // Group & Count (clause) rows carry one column per grouping level: g0, g1, ... + y.
   const isClauseRows = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], "g0");
@@ -343,6 +421,10 @@ export default function GenericChart({ type, rows: rawRows, showLegend, theme, o
 
     // A table shows every level in its own column — the clearest form for a breakdown.
     if (type === "table") {
+      // Same folded "Green / Application" string the bar-chart path would click
+      // through with (see foldClauseRows below) — keeps the value onSliceClick
+      // receives consistent regardless of which view (chart or table) was clicked.
+      const foldedKey = (r: any) => headers.map((_, l) => r[`g${l}`] ?? "—").join(" / ");
       return (
         <div className="chart chart-table">
           <table className="findings">
@@ -351,7 +433,8 @@ export default function GenericChart({ type, rows: rawRows, showLegend, theme, o
             </thead>
             <tbody>
               {rows.map((r: any, i) => (
-                <tr key={i}>
+                <tr key={i} className={onSliceClick ? "clickable-row" : undefined}
+                    onClick={onSliceClick ? () => onSliceClick(foldedKey(r)) : undefined}>
                   {headers.map((_, l) => <td key={l}>{r[`g${l}`] ?? "—"}</td>)}
                   <td className="num">{Number(r.y).toLocaleString()}</td>
                 </tr>
@@ -382,7 +465,8 @@ export default function GenericChart({ type, rows: rawRows, showLegend, theme, o
           <thead><tr><th>Group</th>{hasSeries && <th>Split</th>}<th>Value</th></tr></thead>
           <tbody>
             {rows.map((r, i) => (
-              <tr key={i}>
+              <tr key={i} className={onSliceClick ? "clickable-row" : undefined}
+                  onClick={onSliceClick ? () => onSliceClick(String(r.x ?? "—")) : undefined}>
                 <td>{r.x ?? "—"}</td>
                 {hasSeries && <td>{r.series ?? "—"}</td>}
                 <td className="num">{Number(r.y).toLocaleString()}</td>
@@ -396,6 +480,7 @@ export default function GenericChart({ type, rows: rawRows, showLegend, theme, o
 
   return (
     <ChartWithLegend type={type} rows={rows} showLegend={showLegend} theme={theme}
-                     onSliceClick={onSliceClick} hidden={hidden} onToggleHidden={onToggleHidden} />
+                     onSliceClick={onSliceClick} hidden={hidden} onToggleHidden={onToggleHidden}
+                     categoryLabel={categoryLabel} valueLabel={valueLabel} />
   );
 }

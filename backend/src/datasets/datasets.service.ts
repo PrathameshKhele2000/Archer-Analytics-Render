@@ -432,12 +432,39 @@ export class DatasetsService {
       const widgetId = /^mv_chart_(\d+)(?:_build)?$/.exec(relname)?.[1];
       if (widgetId) await this.db.query(`DELETE FROM chart_matview_state WHERE widget_id = $1`, [Number(widgetId)]);
     }
+    // Charts reference a dataset/view by KEY inside opaque config JSON, not a real
+    // foreign key (see db/init.sql — dashboard_widgets.config has no FK), so nothing
+    // about dropping the table above stops those charts from still existing —
+    // they'd just start failing every load (their matview is gone, and a live
+    // query would hit a table that no longer exists) instead of being cleanly
+    // removed. Delete them explicitly: any chart on this dataset directly, plus any
+    // chart on a VIEW built on this dataset (about to be deleted below too).
+    const { rows: viewRows } = await this.db.query<{ key: string }>(
+      `SELECT key FROM reports WHERE dataset_key = $1`, [dataset.key],
+    );
+    const viewKeys = viewRows.map((r) => r.key);
+    const { rows: widgetRows } = await this.db.query<{ id: number }>(
+      `SELECT id FROM dashboard_widgets WHERE config->>'dataset' = $1 OR config->>'viewKey' = ANY($2::text[])`,
+      [dataset.key, viewKeys],
+    );
+    for (const { id: widgetId } of widgetRows) {
+      await this.db.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}`);
+      await this.db.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}_build`);
+      await this.db.query(`DELETE FROM chart_matview_state WHERE widget_id = $1`, [widgetId]);
+    }
+    if (widgetRows.length) {
+      await this.db.query(`DELETE FROM dashboard_widgets WHERE id = ANY($1::int[])`, [widgetRows.map((w) => w.id)]);
+    }
+
     await this.db.query(`DROP TABLE IF EXISTS ${dataset.target_table}`);
     await this.db.query(`DELETE FROM field_mapping WHERE source = $1`, [dataset.key]);
     // Remove this dataset's reports/views (their columns + access cascade).
     await this.db.query(`DELETE FROM reports WHERE dataset_key = $1`, [dataset.key]);
     await this.db.query(`DELETE FROM dataset WHERE id = $1`, [id]); // fields cascade
     this.catalogs.invalidate(dataset.key);
-    this.log.log(`removed dataset ${dataset.key} (dropped ${dataset.target_table}, its reports)`);
+    this.log.log(
+      `removed dataset ${dataset.key} (dropped ${dataset.target_table}, ${viewKeys.length} views, ${widgetRows.length} charts)`,
+    );
+    return { deletedViews: viewKeys.length, deletedCharts: widgetRows.length };
   }
 }

@@ -563,7 +563,7 @@ export const api = {
       importRows: (id: number, rows: Record<string, any>[], keyColumn?: string) =>
         post<{ loaded: number; duplicates: number; skipped: number }>(
           `/api/admin/datasets/${id}/import`, { rows, keyColumn }),
-      remove: (id: number) => del<void>(`/api/admin/datasets/${id}`),
+      remove: (id: number) => del<{ deletedViews: number; deletedCharts: number }>(`/api/admin/datasets/${id}`),
     },
     views: {
       list: () => get<RecordView[]>("/api/admin/reports/views"),
@@ -574,10 +574,14 @@ export const api = {
       // `capped` = the real total is higher (counting stops past a cap for speed).
       matchCount: (datasetKey: string, conditions: FilterCondition[], logic?: string) =>
         post<{ total: number; capped: boolean }>("/api/admin/reports/match-count", { datasetKey, conditions, logic }),
+      // Top 50 matching rows for verifying a condition before saving the view.
+      previewMatches: (datasetKey: string, conditions: FilterCondition[], logic?: string, columns?: string[]) =>
+        post<{ rows: Record<string, any>[]; total: number; capped: boolean }>(
+          "/api/admin/reports/preview-matches", { datasetKey, conditions, logic, columns }),
       create: (body: SaveViewBody) => post<RecordView>("/api/admin/reports/views", body),
       update: (id: number, body: SaveViewBody) =>
         request<RecordView>(`/api/admin/reports/views/${id}`, { method: "PUT", body: JSON.stringify(body) }),
-      remove: (id: number) => del<void>(`/api/admin/reports/views/${id}`),
+      remove: (id: number) => del<{ deletedCharts: number }>(`/api/admin/reports/views/${id}`),
     },
   },
 

@@ -273,12 +273,20 @@ export default function DataSourcesTab() {
   const remove = async (d: Dataset) => {
     const warning = d.is_protected
       ? `Remove the built-in "${d.name}" dataset and drop its table (${d.target_table})?\n\n` +
-        `This is the original Vulnerability Findings pipe — its Field Mapping entries and any ` +
-        `sample reports/dashboards built against it will break once the table is gone. ` +
+        `This is the original Vulnerability Findings pipe — its Field Mapping entries, its views, ` +
+        `and any charts built on it or on those views will be deleted along with it. ` +
         `The data is a copy from Archer, so it can be re-synced if you recreate it.`
-      : `Remove the "${d.name}" dataset and drop its table (${d.target_table})?\n\nThe data is a copy from Archer, so it can be re-synced.`;
+      : `Remove the "${d.name}" dataset and drop its table (${d.target_table})?\n\n` +
+        `Its views, and any charts built on it or on those views, will be deleted too. ` +
+        `The data is a copy from Archer, so it can be re-synced.`;
     if (!confirm(warning)) return;
-    try { await api.admin.datasets.remove(d.id); await load(); }
+    try {
+      const res = await api.admin.datasets.remove(d.id);
+      await load();
+      if (res.deletedViews || res.deletedCharts) {
+        alert(`"${d.name}" removed — also deleted ${res.deletedViews} view${res.deletedViews === 1 ? "" : "s"} and ${res.deletedCharts} chart${res.deletedCharts === 1 ? "" : "s"} that were built on it.`);
+      }
+    }
     catch (e: any) { setErr(e.message ?? "Remove failed"); }
   };
 

@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, Logger, NotFoundException, OnApplicatio
 import { Response } from "express";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { CacheService } from "../cache/cache.service";
+import { DbService } from "../database/db.service";
 import { ExportService } from "./export.service";
 import { buildExpressionWhere, FilterField } from "./filterable-fields";
 import { CatalogService } from "../datasets/catalog.service";
@@ -36,6 +37,7 @@ export class ReportsService implements OnApplicationBootstrap {
     private readonly cache: CacheService,
     private readonly exportSvc: ExportService,
     private readonly catalogs: CatalogService,
+    private readonly db: DbService,
   ) {}
 
   listForUser(user: AuthenticatedUser) {
@@ -279,6 +281,28 @@ export class ReportsService implements OnApplicationBootstrap {
     return { total, capped };
   }
 
+  /** Sample of actual matching rows while an admin builds the condition — lets them
+   *  verify it's selecting the right records, not just a count. Reuses whichever
+   *  columns are already chosen in "Columns To Show"; falls back to every dataset
+   *  field if none are picked yet (condition can be built before or after columns). */
+  async previewMatches(datasetKey: string, conditions: any[], logic: string | null | undefined, columns?: string[]) {
+    const catalog = await this.catalogs.forDataset(datasetKey);
+    const keys = columns?.length ? columns.filter((k) => catalog.recordFields[k]) : Object.keys(catalog.recordFields);
+    const ctx: ReportContext = {
+      table: catalog.table,
+      baseFrom: catalog.baseFrom, searchable: catalog.searchable, globalSearch: catalog.globalSearch,
+      sortable: catalog.sortable, filterFields: catalog.filterFields,
+      selectCols: keys.map((k) => ({ key: k, expr: catalog.recordFields[k].expr })),
+      defaultSortExpr: "f.record_id",
+    };
+    const q = { page: 1, size: 50, conditions: conditions ?? [], logic: logic ?? undefined };
+    const [{ total, capped }, rows] = await Promise.all([
+      this.repo.countFindings(ctx, q),
+      this.repo.pageFindings(ctx, q),
+    ]);
+    return { rows, total, capped };
+  }
+
   listViews() {
     return this.repo.listViews();
   }
@@ -361,8 +385,24 @@ export class ReportsService implements OnApplicationBootstrap {
   async deleteView(id: number) {
     const view = await this.repo.findById(id);
     if (!view) throw new NotFoundException("View not found");
+    // A chart references its view by KEY inside opaque config JSON, not a real
+    // foreign key — deleting the view alone would leave any chart built on it
+    // broken (its matview gone, its live query pointed at scoping that no longer
+    // exists) instead of cleanly removed. Delete those charts explicitly.
+    const { rows: widgetRows } = await this.db.query<{ id: number }>(
+      `SELECT id FROM dashboard_widgets WHERE config->>'viewKey' = $1`, [view.key],
+    );
+    for (const { id: widgetId } of widgetRows) {
+      await this.db.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}`);
+      await this.db.query(`DROP MATERIALIZED VIEW IF EXISTS mv_chart_${widgetId}_build`);
+      await this.db.query(`DELETE FROM chart_matview_state WHERE widget_id = $1`, [widgetId]);
+    }
+    if (widgetRows.length) {
+      await this.db.query(`DELETE FROM dashboard_widgets WHERE id = ANY($1::int[])`, [widgetRows.map((w) => w.id)]);
+    }
     await this.repo.deleteView(id);
     await this.invalidate(view.key);
+    return { deletedCharts: widgetRows.length };
   }
 
   /** A view's cached pages/counts must go when its scope, columns or access change. */

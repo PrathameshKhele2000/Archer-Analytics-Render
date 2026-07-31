@@ -33,6 +33,14 @@ export class ReportsAdminController {
     return this.reports.matchCount(body.datasetKey || "archer-findings", body.conditions ?? [], body.logic);
   }
 
+  /** Top 50 matching rows while building a view's condition — verification, not the
+   *  saved view itself, which is why this lives beside match-count rather than reusing
+   *  the real report-data endpoint (no saved report/id exists yet at this point). */
+  @Post("preview-matches")
+  previewMatches(@Body() body: { datasetKey?: string; conditions?: any[]; logic?: string | null; columns?: string[] }) {
+    return this.reports.previewMatches(body.datasetKey || "archer-findings", body.conditions ?? [], body.logic, body.columns);
+  }
+
   @Get("views")
   listViews() {
     return this.reports.listViews();
