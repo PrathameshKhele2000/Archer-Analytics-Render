@@ -418,8 +418,32 @@ export class DatasetSyncService {
           for (const { indexname } of indexes) await client.query(`DROP INDEX IF EXISTS ${indexname}`);
           await client.query(`TRUNCATE ${ds.target_table}`);
           await client.query(`INSERT INTO ${ds.target_table} SELECT * FROM ${reload}`);
-          for (const { indexdef } of indexes) await client.query(indexdef);
+          // Each rebuild gets its OWN savepoint: a field with values too large for a
+          // plain btree entry (Postgres's own limit, ~2700 bytes — a long free-text
+          // "description"-style column is the common real case) would otherwise take
+          // the entire sync down over ONE cosmetic index, even though every row of
+          // actual data loaded perfectly fine. Losing that one field's fast
+          // group-by/filter index is a real but minor regression; losing the whole
+          // sync over it is not an acceptable trade — the data always wins.
+          const skipped: string[] = [];
+          for (const { indexname, indexdef } of indexes) {
+            await client.query("SAVEPOINT ix_rebuild");
+            try {
+              await client.query(indexdef);
+              await client.query("RELEASE SAVEPOINT ix_rebuild");
+            } catch (e: any) {
+              await client.query("ROLLBACK TO SAVEPOINT ix_rebuild");
+              skipped.push(indexname);
+              this.log.warn(
+                `sync ${ds.key}: couldn't rebuild index '${indexname}' — ${e?.message ?? e}. ` +
+                `The data itself synced fine; that field just lost its fast filter/group-by index.`,
+              );
+            }
+          }
           await client.query("COMMIT");
+          if (skipped.length) {
+            this.log.warn(`sync ${ds.key}: ${skipped.length} index(es) skipped this run: ${skipped.join(", ")}`);
+          }
         } catch (e) {
           await client.query("ROLLBACK").catch(() => undefined);
           throw e;

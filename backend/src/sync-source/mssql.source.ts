@@ -6,6 +6,13 @@ export interface SourceColumn {
   name: string;
   sqlType: string;
   nullable: boolean;
+  /** SQL Server's declared max length for a character column, in characters — null
+   *  for non-character types, and -1 for an unbounded one (nvarchar(max)/text/ntext).
+   *  Used to steer Discover away from auto-indexing a free-text column: Postgres's
+   *  btree index has a hard per-entry size limit (~2700 bytes), which a genuine
+   *  long-text field (a "description"/"notes"-style column) can exceed once real
+   *  data lands, aborting the sync outright if nothing accounts for it up front. */
+  maxLength: number | null;
 }
 
 /**
@@ -143,7 +150,8 @@ export class MssqlSource implements OnModuleDestroy {
       .input("schema", sql.NVarChar, schema)
       .input("table", sql.NVarChar, table)
       .query(
-        `SELECT COLUMN_NAME AS name, DATA_TYPE AS sqlType, IS_NULLABLE AS nullable
+        `SELECT COLUMN_NAME AS name, DATA_TYPE AS sqlType, IS_NULLABLE AS nullable,
+                CHARACTER_MAXIMUM_LENGTH AS maxLength
          FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table
          ORDER BY ORDINAL_POSITION`,
@@ -151,6 +159,7 @@ export class MssqlSource implements OnModuleDestroy {
     if (!r.recordset.length) throw new BadRequestException(`Source table '${tableName}' not found or not readable`);
     return r.recordset.map((c: any) => ({
       name: c.name, sqlType: String(c.sqlType), nullable: c.nullable === "YES",
+      maxLength: c.maxLength === null || c.maxLength === undefined ? null : Number(c.maxLength),
     }));
   }
 

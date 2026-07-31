@@ -37,6 +37,7 @@ export class SyncSourceController {
       name: c.name,
       sqlType: c.sqlType,
       nullable: c.nullable,
+      maxLength: c.maxLength,
       dataType: dataTypeForSqlServer(c.sqlType), // our column type
     }));
   }

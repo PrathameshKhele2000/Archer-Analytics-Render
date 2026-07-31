@@ -23,6 +23,20 @@ function guessType(values: string[]): string {
 const FIELD_FLAGS = { is_dimension: true, is_measurable: true, is_searchable: true } as const;
 const emptyField = (): DatasetFieldDef => ({ label: "", data_type: "text", ...FIELD_FLAGS });
 
+// A dimension field gets a real Postgres index (for fast filter/group-by) — but
+// Postgres's btree index has a hard per-entry size limit (~2700 bytes). A genuine
+// long free-text column ("Description", "Notes", "Remediation Plan", ...) can blow
+// past that once real data lands, which aborts the sync entirely the moment that
+// index tries to build against real values. Defaulting a long/unbounded text field
+// to NOT be a dimension avoids ever creating that index in the first place — the
+// field still syncs and shows up as a normal column, it just isn't auto-indexed.
+const SAFE_DIMENSION_TEXT_LENGTH = 300;
+function isSafeDimension(dataType: string, maxLength: number | null | undefined): boolean {
+  if (dataType !== "text") return true;
+  if (maxLength == null || maxLength < 0) return false; // unbounded (nvarchar(max)/text/ntext)
+  return maxLength <= SAFE_DIMENSION_TEXT_LENGTH;
+}
+
 const emptyDraft = (): CreateDatasetBody => ({
   name: "", description: "", sourceTable: "", keyColumn: "", watermarkColumn: "",
   fields: [emptyField()],
@@ -169,9 +183,18 @@ export default function DataSourcesTab() {
         headers.forEach((h, i) => (o[h] = (r[i] ?? "").trim()));
         return o;
       });
-      const fields: DatasetFieldDef[] = headers.map((h) => ({
-        label: h, data_type: guessType(rows.map((r) => r[h])), ...FIELD_FLAGS,
-      }));
+      const fields: DatasetFieldDef[] = headers.map((h) => {
+        const colValues = rows.map((r) => r[h]);
+        const dataType = guessType(colValues);
+        // No declared length here (raw CSV text) — the longest value actually seen
+        // stands in for it, same safety rule as the MS SQL Discover path above.
+        // A reduce, not Math.max(...spread) — a large CSV can have far more rows
+        // than V8's call-stack argument limit tolerates spread into one call.
+        const maxLen = dataType === "text"
+          ? colValues.reduce((m, v) => Math.max(m, (v ?? "").length), 0)
+          : null;
+        return { label: h, data_type: dataType, ...FIELD_FLAGS, is_dimension: isSafeDimension(dataType, maxLen) };
+      });
       // Guess the row-identity column from common export header names (VSR Archer ID,
       // Record Id, ContentId, ...), so re-importing the same file upserts instead of
       // appending duplicate rows under fresh sequential ids. Left blank if nothing
@@ -216,7 +239,10 @@ export default function DataSourcesTab() {
       const keyColLower = keyCol.toLowerCase();
       const fields: DatasetFieldDef[] = cols
         .filter((c) => c.name.toLowerCase() !== keyColLower) // key column -> record_id (added automatically)
-        .map((c) => ({ label: c.name, data_type: c.dataType, ...FIELD_FLAGS }));
+        .map((c) => ({
+          label: c.name, data_type: c.dataType, ...FIELD_FLAGS,
+          is_dimension: isSafeDimension(c.dataType, c.maxLength),
+        }));
       setDraft({ ...draft, fields, keyColumn: keyCol, watermarkColumn: wmCol });
       setDiscovered(fields.length);
       if (!keyCol) {

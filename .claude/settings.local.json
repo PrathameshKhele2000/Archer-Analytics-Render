@@ -365,7 +365,21 @@
       "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP TABLE IF EXISTS ix_test_target, ix_test_reload;')",
       "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c ' *)",
       "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT * FROM ix_dupe_test;')",
-      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP TABLE IF EXISTS ix_dupe_test;')"
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP TABLE IF EXISTS ix_dupe_test;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -v ON_ERROR_STOP=1 -c 'ROLLBACK;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -v ON_ERROR_STOP=1 -c 'DROP TABLE IF EXISTS ix_oversize_test; DROP INDEX IF EXISTS ix_bad;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -v ON_ERROR_STOP=1 -c 'CREATE TABLE ix_oversize_test \\(record_id BIGINT PRIMARY KEY, description TEXT, severity TEXT\\);')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -v ON_ERROR_STOP=1 -c 'INSERT INTO ix_oversize_test SELECT g, repeat\\('\\\\''x'\\\\'', 3000\\), '\\\\''High'\\\\'' FROM generate_series\\(1, 5\\) AS g;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT record_id, length\\(description\\) FROM ix_oversize_test;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'CREATE INDEX ix_desc_plain ON ix_oversize_test \\(description, record_id\\);')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP INDEX IF EXISTS ix_desc_plain;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres)",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT indexname FROM pg_indexes WHERE tablename = '\\\\''ix_oversize_test'\\\\'' ORDER BY indexname;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'SELECT count\\(*\\) FROM ix_oversize_test;')",
+      "Bash(psql postgresql://postgres:Khele%402000@localhost:5433/postgres -c 'DROP TABLE IF EXISTS ix_oversize_test;')",
+      "Bash(export PGPASSWORD='Khele@2000')",
+      "Bash(psql -h localhost -p 5433 -U postgres -d postgres -c \"\\\\conninfo\")",
+      "Bash(psql -h localhost -p 5433 -U postgres -d postgres -c ' *)"
     ]
   }
 }

@@ -550,7 +550,7 @@ export const api = {
       ping: () => get<{ ok: boolean; server?: string; error?: string }>("/api/admin/source/ping"),
       tables: () => get<{ name: string; type: string }[]>("/api/admin/source/tables"),
       columns: (table: string) =>
-        get<{ name: string; sqlType: string; nullable: boolean; dataType: string }[]>(
+        get<{ name: string; sqlType: string; nullable: boolean; maxLength: number | null; dataType: string }[]>(
           `/api/admin/source/columns?table=${encodeURIComponent(table)}`),
     },
     datasets: {
