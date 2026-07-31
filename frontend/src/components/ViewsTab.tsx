@@ -4,8 +4,6 @@ import FilterConditions from "./FilterConditions";
 import Modal from "./Modal";
 import MultiCheckDropdown from "./MultiCheckDropdown";
 
-const REGISTER_KEY = "findings-register"; // the built-in full register (not deletable)
-
 type RecCol = { key: string; label: string; numeric?: boolean };
 type DatasetSchema = FieldsCatalog & { recordColumns: RecCol[] };
 
@@ -188,7 +186,7 @@ export default function ViewsTab() {
                 <td>
                   <div className="panel-actions">
                     <button onClick={() => openEdit(v)}>Edit</button>
-                    {v.key !== REGISTER_KEY && <button onClick={() => remove(v)}>✕</button>}
+                    <button onClick={() => remove(v)}>✕</button>
                   </div>
                 </td>
               </tr>

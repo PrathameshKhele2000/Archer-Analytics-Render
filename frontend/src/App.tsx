@@ -142,7 +142,7 @@ export default function App() {
           {isSystemAdmin && <button onClick={() => setShowArch(true)}>Architecture</button>}
         </nav>
         <div className="sync">
-          <span>{user.full_name} · {user.roles.join(", ")}</span>
+          <span>{user.full_name}</span>
           <button onClick={logout}>Sign out</button>
         </div>
       </header>

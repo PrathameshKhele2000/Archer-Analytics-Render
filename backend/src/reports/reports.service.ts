@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnApplicationBootstrap } from "@nestjs/common";
+import { ForbiddenException, Injectable, Logger, NotFoundException, OnApplicationBootstrap } from "@nestjs/common";
 import { Response } from "express";
 import { AuthenticatedUser } from "../auth/jwt-payload.interface";
 import { CacheService } from "../cache/cache.service";
@@ -361,9 +361,6 @@ export class ReportsService implements OnApplicationBootstrap {
   async deleteView(id: number) {
     const view = await this.repo.findById(id);
     if (!view) throw new NotFoundException("View not found");
-    if (view.key === "findings-register") {
-      throw new BadRequestException("The full Findings Register cannot be deleted");
-    }
     await this.repo.deleteView(id);
     await this.invalidate(view.key);
   }

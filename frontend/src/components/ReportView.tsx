@@ -131,7 +131,7 @@ export default function ReportView({
             {appliedCount > 0 && <span className="filter-count">{appliedCount}</span>}
             <span className="caret">{showFilters ? "▴" : "▾"}</span>
           </button>
-          <ExportMenu onExport={runExport} busy={exporting} />
+          <ExportMenu onExport={runExport} busy={exporting} formats={["csv", "excel"]} />
         </div>
       </div>
 

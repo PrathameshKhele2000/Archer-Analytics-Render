@@ -164,6 +164,16 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
   font-family: var(--font-sans); font-size: 13px; padding: 8px; border: 1px solid var(--hairline);
   border-radius: 3px; background: var(--bg); color: var(--ink);
 }
+.pw-field { position: relative; display: flex; }
+.pw-field input { flex: 1; padding-right: 34px; }
+/* Overrides .login-card button's full-width primary-button styling — this one
+   is a small icon toggle sitting inside the password field, not a form action. */
+.login-card .pw-eye {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  margin-top: 0; width: 26px; height: 26px; padding: 0; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+}
+.login-card .pw-eye:hover { color: var(--accent); background: transparent; }
 .login-card button {
   margin-top: 8px; font-size: 13px; font-weight: 500; border: 1px solid var(--accent);
   background: var(--accent); color: var(--surface); padding: 8px 12px; border-radius: 3px; cursor: pointer;
@@ -189,6 +199,20 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
 /* ---- Virtualized register table ---- */
 .vtable { position: relative; }
 .vtable-scroll { overflow-x: auto; border: 1px solid var(--hairline); border-radius: 3px 3px 0 0; }
+/* A default OS overlay scrollbar (macOS: hidden until you actually scroll) makes
+   it easy to miss that a wide/tall table has more content at all. A custom-styled
+   scrollbar is always a "classic" one — reserved space, always drawn — in every
+   browser that honors these rules, which is what actually fixes that: not hidden
+   by default, no interaction needed to reveal it. */
+.vtable-scroll, .vt-body, .vt-hscroll-fixed { scrollbar-width: thin; scrollbar-color: var(--muted) var(--bg); }
+.vtable-scroll::-webkit-scrollbar, .vt-body::-webkit-scrollbar, .vt-hscroll-fixed::-webkit-scrollbar { width: 10px; height: 10px; }
+.vtable-scroll::-webkit-scrollbar-track, .vt-body::-webkit-scrollbar-track, .vt-hscroll-fixed::-webkit-scrollbar-track { background: var(--bg); }
+.vtable-scroll::-webkit-scrollbar-thumb, .vt-body::-webkit-scrollbar-thumb, .vt-hscroll-fixed::-webkit-scrollbar-thumb {
+  background: var(--muted); border-radius: 5px; border: 2px solid var(--bg);
+}
+.vtable-scroll::-webkit-scrollbar-thumb:hover, .vt-body::-webkit-scrollbar-thumb:hover, .vt-hscroll-fixed::-webkit-scrollbar-thumb:hover {
+  background: var(--ink);
+}
 .vt-head { display: grid; position: sticky; top: 0; z-index: 2; background: var(--surface);
   border-bottom: 1px solid var(--hairline); }
 .vt-head .vt-cell { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted);
@@ -217,7 +241,7 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
   border-radius: 3px; padding: 0 8px; background: var(--surface); }
 .search-box .search-icon { color: var(--muted); font-size: 15px; }
 .search-box input { border: none; background: transparent; outline: none; font-family: var(--font-sans);
-  font-size: 13px; padding: 7px 2px; color: var(--ink); width: 200px; }
+  font-size: 13px; padding: 9px 2px; color: var(--ink); width: 340px; }
 .search-box .search-clear { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 11px; padding: 2px; }
 .search-box .search-clear:hover { color: var(--ink); }
 .vt-row { border-bottom: 1px solid var(--hairline); }
@@ -239,7 +263,13 @@ table.findings td.num { font-family: var(--font-mono); font-size: 12px; }
 }
 .role-card { border: 1px solid var(--hairline); border-radius: 3px; padding: 12px 16px; margin-bottom: 12px; }
 .role-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.row-actions { display: flex; gap: 6px; white-space: nowrap; }
+/* table.findings td defaults to vertical-align:top, fine for plain text cells —
+   but this cell's content is a row of bordered/padded buttons, taller than a
+   line of text, so top-aligning it left visible empty space below the buttons
+   and above the row's bottom border instead of the buttons sitting centered in
+   the row like the rest of its height suggests they should. */
+td.row-actions { vertical-align: middle; }
+.row-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 button.danger, .admin-tab button.danger { color: #b42318; border-color: #f3b9b2; }
 button.danger:hover, .admin-tab button.danger:hover { background: #fdecea; color: #b42318; border-color: #e88b80; }
 .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; margin-top: 8px; }
@@ -813,7 +843,11 @@ tr.row-unmapped td:first-child { box-shadow: inset 3px 0 0 var(--sev-critical, #
 .login-card .login-arch-link { background: none; border: none; color: var(--accent); cursor: pointer;
   font-size: 12px; text-decoration: underline; margin-top: 6px; padding: 4px; font-family: var(--font-sans);
   align-self: center; font-weight: 500; }
-.login-card .login-arch-link:hover { color: var(--accent-hover); }
+/* background:none pinned explicitly here — without it, the generic
+   ".login-card button:hover" rule (solid-button darken-on-hover) still wins on
+   background (nothing here outranked it before), landing on the same color as
+   this rule's own text color and making the link unreadable on hover. */
+.login-card .login-arch-link:hover { color: var(--accent-hover); background: none; }
 
 /* ---- Architecture page: highlights, ETL, cards ---- */
 .arch-highlights { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0 26px; }

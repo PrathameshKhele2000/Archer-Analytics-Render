@@ -5,7 +5,6 @@ import { buildCsv, downloadText, splitList } from "../csv";
 import DataSourcesTab from "./DataSourcesTab";
 import AccessControlTab from "./AccessControlTab";
 import ImportPanel from "./ImportPanel";
-import MappingTab from "./MappingTab";
 import Modal from "./Modal";
 import ViewsTab from "./ViewsTab";
 
@@ -394,7 +393,9 @@ const TABS = [
   { key: "roles", label: "Access Control", render: () => <AccessControlTab />, permission: "admin:roles:manage" },
   { key: "datasets", label: "Data Sources", render: () => <DataSourcesTab />, permission: "admin:datasets:manage" },
   { key: "views", label: "Views", render: () => <ViewsTab />, permission: "admin:reports:manage" },
-  { key: "mapping", label: "Findings Field Mapping", render: () => <MappingTab />, permission: "admin:mapping:manage" },
+  // Findings Field Mapping: hidden from the nav (not deleted — the tab, its route,
+  // and its permission still exist underneath) since it wasn't actually in use.
+  // Re-add a row here identical to the one above to bring it back.
   { key: "sync", label: "Sync", render: () => <SyncTab />, permission: "sync:read" },
   { key: "audit", label: "Audit", render: () => <AuditTab />, permission: "audit:read" },
 ];
